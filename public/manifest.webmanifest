@@ -1,0 +1,10 @@
+{
+  "name": "Taiwan Exchange Companion",
+  "short_name": "Exchange Kit",
+  "description": "Translation, phrases, and offline essentials for your exchange.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f5f2ec",
+  "theme_color": "#f5f2ec",
+  "icons": []
+}
