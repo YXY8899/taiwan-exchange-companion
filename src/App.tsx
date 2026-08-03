@@ -19,6 +19,15 @@ type TranslationResult = {
   language: string;
 };
 
+type TranslationApiResponse = {
+  detected_language: string;
+  source_text: string;
+  translated_text: string;
+  romanization: string;
+  context: string;
+  error?: string;
+};
+
 type TripItem = {
   id: string;
   label: string;
@@ -123,35 +132,68 @@ function App() {
     setNotice(null);
   }
 
-  function handleImage(event: React.ChangeEvent<HTMLInputElement>) {
+  async function handleImage(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
-    if (!file.type.startsWith("image/")) {
-      setNotice("Please choose an image file.");
+    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+      setNotice("Choose a JPG, PNG, or WebP image.");
       return;
     }
-    if (imageUrl) URL.revokeObjectURL(imageUrl);
-    setImageUrl(URL.createObjectURL(file));
-    setNotice("Photo ready. Add a little context if you want, then translate.");
+    if (file.size > 8 * 1024 * 1024) {
+      setNotice("Choose an image smaller than 8 MB for now.");
+      return;
+    }
+    try {
+      setImageUrl(await readFileAsDataUrl(file));
+      setNotice("Photo ready. Add a little context if you want, then translate.");
+    } catch {
+      setNotice("That image could not be prepared. Please try another one.");
+    }
   }
 
-  function runTranslation() {
+  async function runTranslation() {
     if (!imageUrl && !text.trim()) {
       setNotice("Add a photo or type a phrase first.");
       return;
     }
+    if (text.trim().length > 500) {
+      setNotice("Keep the optional note under 500 characters.");
+      return;
+    }
     setIsTranslating(true);
     setNotice(null);
-    window.setTimeout(() => {
-      setResult({
-        source: text.trim() || "請問，這個多少錢？",
-        translation: text.trim() ? `A clear, natural translation of “${text.trim()}”.` : "Excuse me, how much does this cost?",
-        pronunciation: text.trim() ? "Pronunciation will appear with the live translator." : "Qǐngwèn, zhège duōshǎo qián?",
-        context: "This demo response is ready for the OpenAI vision connection in the next build step.",
-        language: "Traditional Chinese",
+    setResult(null);
+
+    try {
+      const response = await fetch("/api/translate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: text.trim(), image: imageUrl }),
       });
+      const data = await response.json().catch(() => null) as TranslationApiResponse | null;
+      if (!response.ok || !data || typeof data.source_text !== "string" || typeof data.translated_text !== "string") {
+        throw new Error(data?.error || "The translator could not complete that request.");
+      }
+      setResult({
+        source: data.source_text,
+        translation: data.translated_text,
+        pronunciation: data.romanization || "No pronunciation needed.",
+        context: data.context || "Translation complete.",
+        language: data.detected_language || "Detected language",
+      });
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "The translator could not complete that request.");
+    } finally {
       setIsTranslating(false);
-    }, 700);
+    }
+  }
+
+  function clearTranslationInput() {
+    setText("");
+    setImageUrl(null);
+    setResult(null);
+    setNotice(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
   function saveResult() {
@@ -198,7 +240,7 @@ function App() {
           <div className="date-card"><span>EXCHANGE DAY</span><strong>01</strong><small>Getting ready</small></div>
         </section>
 
-        {activeTab === "translate" && <TranslateView imageUrl={imageUrl} fileInputRef={fileInputRef} text={text} setText={setText} handleImage={handleImage} runTranslation={runTranslation} isTranslating={isTranslating} result={result} saveResult={saveResult} copyText={copyText} speak={speak} notice={notice} setNotice={setNotice} />}
+        {activeTab === "translate" && <TranslateView imageUrl={imageUrl} fileInputRef={fileInputRef} text={text} setText={setText} handleImage={handleImage} runTranslation={runTranslation} clearTranslationInput={clearTranslationInput} isTranslating={isTranslating} result={result} saveResult={saveResult} copyText={copyText} speak={speak} notice={notice} setNotice={setNotice} />}
         {activeTab === "phrasebook" && <PhrasebookView phrases={savedPhrases} copyText={copyText} speak={speak} />}
         {activeTab === "trip" && <TripView items={tripItems} progress={tripProgress} toggleItem={toggleTripItem} notes={notes} setNotes={setNotes} links={usefulLinks} setLinks={setUsefulLinks} expenses={expenses} setExpenses={setExpenses} images={storedImages} setImages={setStoredImages} />}
         {activeTab === "emergency" && <EmergencyView />}
@@ -214,10 +256,10 @@ function App() {
   );
 }
 
-function TranslateView({ imageUrl, fileInputRef, text, setText, handleImage, runTranslation, isTranslating, result, saveResult, copyText, speak, notice, setNotice }: { imageUrl: string | null; fileInputRef: React.RefObject<HTMLInputElement | null>; text: string; setText: (value: string) => void; handleImage: (event: React.ChangeEvent<HTMLInputElement>) => void; runTranslation: () => void; isTranslating: boolean; result: TranslationResult | null; saveResult: () => void; copyText: (value: string) => void; speak: (value: string) => void; notice: string | null; setNotice: (value: string | null) => void }) {
+function TranslateView({ imageUrl, fileInputRef, text, setText, handleImage, runTranslation, clearTranslationInput, isTranslating, result, saveResult, copyText, speak, notice, setNotice }: { imageUrl: string | null; fileInputRef: React.RefObject<HTMLInputElement | null>; text: string; setText: (value: string) => void; handleImage: (event: React.ChangeEvent<HTMLInputElement>) => void; runTranslation: () => void; clearTranslationInput: () => void; isTranslating: boolean; result: TranslationResult | null; saveResult: () => void; copyText: (value: string) => void; speak: (value: string) => void; notice: string | null; setNotice: (value: string | null) => void }) {
   return <div className="translate-layout">
     <section className="hero-card">
-      <div className="hero-card-copy"><span className="hero-kicker"><Icon name="spark" /> PHOTO TRANSLATOR <span className="demo-badge">DEMO MODE</span></span><h2>Point, pause, understand.</h2><p>Take a photo of a menu, sign, or letter. We’ll turn the important bits into something you can use.</p></div>
+      <div className="hero-card-copy"><span className="hero-kicker"><Icon name="spark" /> PHOTO TRANSLATOR <span className="demo-badge">LOCAL TEST</span></span><h2>Point, pause, understand.</h2><p>Take a photo of a menu, sign, or letter. We’ll turn the important bits into something you can use.</p></div>
       <div className="camera-orb"><Icon name="camera" /><span>Camera<br />ready</span></div>
     </section>
 
@@ -228,9 +270,9 @@ function TranslateView({ imageUrl, fileInputRef, text, setText, handleImage, run
         {imageUrl ? <img src={imageUrl} alt="Selected translation source" /> : <><span className="upload-icon"><Icon name="camera" /></span><strong>Tap to take a photo</strong><span>or choose one from your camera roll</span></>}
         {imageUrl && <span className="image-overlay"><Icon name="camera" /> Change photo</span>}
       </button>
-      <div className="language-row"><div className="language-select"><span className="language-flag">中</span><div><small>FROM</small><strong>Auto-detect</strong></div><span className="chevron">⌄</span></div><Icon name="arrow" /><div className="language-select"><span className="language-flag target">A</span><div><small>TO</small><strong>English</strong></div><span className="chevron">⌄</span></div></div>
+      <div className="language-row"><div className="language-select"><span className="language-flag">中</span><div><small>FROM</small><strong>Auto-detect</strong></div><span className="chevron">⌄</span></div><Icon name="arrow" /><div className="language-select"><span className="language-flag target">A</span><div><small>SMART DIRECTION</small><strong>English ↔ 中文</strong></div><span className="chevron">⌄</span></div></div>
       <div className="text-input-wrap"><textarea value={text} onChange={(event) => setText(event.target.value)} placeholder="Or type a phrase to translate..." rows={2} /><span>{text.length}/500</span></div>
-      <div className="action-row"><button className="secondary-button" type="button" onClick={() => { setText(""); setNotice(null); }} disabled={!text && !imageUrl}>Clear</button><button className="primary-button" type="button" onClick={runTranslation} disabled={isTranslating}>{isTranslating ? <><span className="spinner" /> Translating...</> : <>Translate <Icon name="arrow" /></>}</button></div>
+      <div className="action-row"><button className="secondary-button" type="button" onClick={clearTranslationInput} disabled={!text && !imageUrl}>Clear</button><button className="primary-button" type="button" onClick={runTranslation} disabled={isTranslating}>{isTranslating ? <><span className="spinner" /> Translating...</> : <>Translate <Icon name="arrow" /></>}</button></div>
       {notice && <p className="inline-notice" role="status">{notice}</p>}
     </section>
 
@@ -407,6 +449,15 @@ async function removeStoredImage(id: string): Promise<void> {
     transaction.objectStore(IMAGE_STORE_NAME).delete(id);
     transaction.oncomplete = () => resolve();
     transaction.onerror = () => reject(transaction.error ?? new Error("Could not remove image"));
+  });
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("No image data returned"));
+    reader.onerror = () => reject(reader.error ?? new Error("Could not read image"));
+    reader.readAsDataURL(file);
   });
 }
 
