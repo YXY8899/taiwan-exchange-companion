@@ -41,6 +41,17 @@ type Expense = {
   date: string;
 };
 
+type StoredImage = {
+  id: string;
+  title: string;
+  category: string;
+  dataUrl: string;
+  createdAt: string;
+};
+
+const IMAGE_DB_NAME = "exchange-companion-images";
+const IMAGE_STORE_NAME = "saved-images";
+
 const starterPhrases: SavedPhrase[] = [
   { id: "help", source: "請問，可以幫我嗎？", translation: "Excuse me, could you help me?", pronunciation: "Qǐngwèn, kěyǐ bāng wǒ ma?", category: "Getting around" },
   { id: "allergy", source: "我對花生過敏。", translation: "I am allergic to peanuts.", pronunciation: "Wǒ duì huāshēng guòmǐn.", category: "Food & health" },
@@ -86,6 +97,7 @@ function App() {
   const [tripItems, setTripItems] = useState<TripItem[]>(() => loadStorage("tripItems", initialTripItems));
   const [usefulLinks, setUsefulLinks] = useState<UsefulLink[]>(() => loadStorage("usefulLinks", []));
   const [expenses, setExpenses] = useState<Expense[]>(() => loadStorage("expenses", []));
+  const [storedImages, setStoredImages] = useState<StoredImage[]>([]);
   const [notes, setNotes] = useState(() => localStorage.getItem("exchangeNotes") ?? "");
   const [result, setResult] = useState<TranslationResult | null>(null);
   const [text, setText] = useState("");
@@ -99,6 +111,9 @@ function App() {
   useEffect(() => localStorage.setItem("tripItems", JSON.stringify(tripItems)), [tripItems]);
   useEffect(() => localStorage.setItem("usefulLinks", JSON.stringify(usefulLinks)), [usefulLinks]);
   useEffect(() => localStorage.setItem("expenses", JSON.stringify(expenses)), [expenses]);
+  useEffect(() => {
+    loadStoredImages().then(setStoredImages).catch(() => setStoredImages([]));
+  }, []);
   useEffect(() => localStorage.setItem("exchangeNotes", notes), [notes]);
 
   const tripProgress = useMemo(() => Math.round((tripItems.filter((item) => item.done).length / tripItems.length) * 100), [tripItems]);
@@ -185,7 +200,7 @@ function App() {
 
         {activeTab === "translate" && <TranslateView imageUrl={imageUrl} fileInputRef={fileInputRef} text={text} setText={setText} handleImage={handleImage} runTranslation={runTranslation} isTranslating={isTranslating} result={result} saveResult={saveResult} copyText={copyText} speak={speak} notice={notice} setNotice={setNotice} />}
         {activeTab === "phrasebook" && <PhrasebookView phrases={savedPhrases} copyText={copyText} speak={speak} />}
-        {activeTab === "trip" && <TripView items={tripItems} progress={tripProgress} toggleItem={toggleTripItem} notes={notes} setNotes={setNotes} links={usefulLinks} setLinks={setUsefulLinks} expenses={expenses} setExpenses={setExpenses} />}
+        {activeTab === "trip" && <TripView items={tripItems} progress={tripProgress} toggleItem={toggleTripItem} notes={notes} setNotes={setNotes} links={usefulLinks} setLinks={setUsefulLinks} expenses={expenses} setExpenses={setExpenses} images={storedImages} setImages={setStoredImages} />}
         {activeTab === "emergency" && <EmergencyView />}
       </main>
 
@@ -228,8 +243,8 @@ function PhrasebookView({ phrases, copyText, speak }: { phrases: SavedPhrase[]; 
   return <div className="content-stack"><div className="search-bar"><span>⌕</span><input placeholder="Search your phrases" /></div><div className="chip-row"><button className="filter-chip active" type="button">All phrases</button><button className="filter-chip" type="button">Food & health</button><button className="filter-chip" type="button">Getting around</button></div><div className="phrase-list">{phrases.map((phrase) => <article className="phrase-card" key={phrase.id}><div className="phrase-heading"><span className="phrase-category">{phrase.category}</span>{phrase.isNew && <span className="new-label">NEW</span>}</div><p className="phrase-source">{phrase.source}</p><p className="phrase-translation">{phrase.translation}</p><p className="phrase-pronunciation">{phrase.pronunciation}</p><div className="phrase-actions"><button type="button" onClick={() => copyText(phrase.translation)}><Icon name="copy" /> Copy</button><button type="button" onClick={() => speak(phrase.source)}><Icon name="volume" /> Listen</button></div></article>)}</div></div>;
 }
 
-function TripView({ items, progress, toggleItem, notes, setNotes, links, setLinks, expenses, setExpenses }: { items: TripItem[]; progress: number; toggleItem: (id: string) => void; notes: string; setNotes: (value: string) => void; links: UsefulLink[]; setLinks: React.Dispatch<React.SetStateAction<UsefulLink[]>>; expenses: Expense[]; setExpenses: React.Dispatch<React.SetStateAction<Expense[]>> }) {
-  return <div className="content-stack"><section className="progress-card"><div><p className="section-label">ARRIVAL CHECKLIST</p><h3>{progress === 100 ? "You’re all set." : "One thoughtful step at a time."}</h3><p>{items.filter((item) => item.done).length} of {items.length} essentials ready</p></div><div className="progress-ring" style={{ "--progress": `${progress * 3.6}deg` } as React.CSSProperties}><strong>{progress}%</strong><span>ready</span></div></section><section className="checklist-card"><div className="section-row"><div><p className="section-label">BEFORE YOU GO</p><h3>Your essentials</h3></div><button className="plain-add" type="button"><Icon name="plus" /> Add</button></div><div className="checklist">{items.map((item) => <button key={item.id} className={`check-item ${item.done ? "done" : ""}`} type="button" onClick={() => toggleItem(item.id)}><span className="check-box">{item.done && <Icon name="check" />}</span><span>{item.label}</span></button>)}</div></section><ExpenseTracker expenses={expenses} setExpenses={setExpenses} /><section className="notes-card"><div className="section-row"><div><p className="section-label">A NOTE TO YOUR FUTURE SELF</p><h3>Keep it somewhere easy.</h3></div><span className="offline-label"><Icon name="lock" /> Private</span></div><textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Your first address, a reminder, or something you don’t want to forget..." rows={4} /></section><UsefulLinksCard links={links} setLinks={setLinks} /></div>;
+function TripView({ items, progress, toggleItem, notes, setNotes, links, setLinks, expenses, setExpenses, images, setImages }: { items: TripItem[]; progress: number; toggleItem: (id: string) => void; notes: string; setNotes: (value: string) => void; links: UsefulLink[]; setLinks: React.Dispatch<React.SetStateAction<UsefulLink[]>>; expenses: Expense[]; setExpenses: React.Dispatch<React.SetStateAction<Expense[]>>; images: StoredImage[]; setImages: React.Dispatch<React.SetStateAction<StoredImage[]>> }) {
+  return <div className="content-stack"><section className="progress-card"><div><p className="section-label">ARRIVAL CHECKLIST</p><h3>{progress === 100 ? "You’re all set." : "One thoughtful step at a time."}</h3><p>{items.filter((item) => item.done).length} of {items.length} essentials ready</p></div><div className="progress-ring" style={{ "--progress": `${progress * 3.6}deg` } as React.CSSProperties}><strong>{progress}%</strong><span>ready</span></div></section><section className="checklist-card"><div className="section-row"><div><p className="section-label">BEFORE YOU GO</p><h3>Your essentials</h3></div><button className="plain-add" type="button"><Icon name="plus" /> Add</button></div><div className="checklist">{items.map((item) => <button key={item.id} className={`check-item ${item.done ? "done" : ""}`} type="button" onClick={() => toggleItem(item.id)}><span className="check-box">{item.done && <Icon name="check" />}</span><span>{item.label}</span></button>)}</div></section><ExpenseTracker expenses={expenses} setExpenses={setExpenses} /><ImageLibrary images={images} setImages={setImages} /><section className="notes-card"><div className="section-row"><div><p className="section-label">A NOTE TO YOUR FUTURE SELF</p><h3>Keep it somewhere easy.</h3></div><span className="offline-label"><Icon name="lock" /> Private</span></div><textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Your first address, a reminder, or something you don’t want to forget..." rows={4} /></section><UsefulLinksCard links={links} setLinks={setLinks} /></div>;
 }
 
 function ExpenseTracker({ expenses, setExpenses }: { expenses: Expense[]; setExpenses: React.Dispatch<React.SetStateAction<Expense[]>> }) {
@@ -257,6 +272,61 @@ function ExpenseTracker({ expenses, setExpenses }: { expenses: Expense[]; setExp
   }
 
   return <section className="expense-card"><div className="section-row"><div><p className="section-label">TRIP SPENDING</p><h3>Keep an easy eye on it.</h3></div><button className="plain-add" type="button" onClick={() => { setIsAdding((value) => !value); setError(null); }}><Icon name="plus" /> {isAdding ? "Close" : "Add expense"}</button></div><div className="expense-summary"><div><span>Total recorded</span><strong>{currency} {total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></div><span className="expense-count">{expenses.length} {expenses.length === 1 ? "entry" : "entries"}</span></div>{isAdding && <form className="expense-form" onSubmit={addExpense}><label><span>Amount</span><input value={amount} onChange={(event) => setAmount(event.target.value)} type="number" inputMode="decimal" min="0" step="0.01" placeholder="0.00" /></label><label><span>Currency</span><select value={currency} onChange={(event) => setCurrency(event.target.value)}><option>TWD</option><option>USD</option><option>EUR</option><option>GBP</option><option>SGD</option><option>JPY</option></select></label><label><span>Category</span><select value={category} onChange={(event) => setCategory(event.target.value)}><option>Food</option><option>Transport</option><option>Accommodation</option><option>Shopping</option><option>Study</option><option>Other</option></select></label><label><span>Date</span><input value={date} onChange={(event) => setDate(event.target.value)} type="date" /></label><label className="expense-note-field"><span>Note (optional)</span><input value={note} onChange={(event) => setNote(event.target.value)} placeholder="Night market snacks" /></label><button className="primary-button" type="submit">Save expense <Icon name="arrow" /></button>{error && <p className="form-error" role="alert">{error}</p>}</form>}{expenses.length > 0 && <div className="expense-list">{expenses.slice(0, 6).map((expense) => <article className="expense-row" key={expense.id}><div className="expense-category-dot">{expense.category.slice(0, 1)}</div><div className="expense-copy"><strong>{expense.note || expense.category}</strong><span>{expense.category} · {expense.date}</span></div><b>{expense.currency} {expense.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</b><button className="delete-link" type="button" onClick={() => setExpenses((current) => current.filter((item) => item.id !== expense.id))} aria-label={`Delete ${expense.note || expense.category} expense`}>×</button></article>)}</div>}</section>;
+}
+
+function ImageLibrary({ images, setImages }: { images: StoredImage[]; setImages: React.Dispatch<React.SetStateAction<StoredImage[]>> }) {
+  const [title, setTitle] = useState("");
+  const [category, setCategory] = useState("Maps");
+  const [dataUrl, setDataUrl] = useState<string | null>(null);
+  const [isAdding, setIsAdding] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function handleFile(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      setError("Choose an image file such as JPG, PNG, or WEBP.");
+      return;
+    }
+    if (file.size > 12 * 1024 * 1024) {
+      setError("That image is larger than 12 MB. Choose a smaller copy for offline storage.");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      setDataUrl(typeof reader.result === "string" ? reader.result : null);
+      setError(null);
+    };
+    reader.onerror = () => setError("This image could not be read. Try another file.");
+    reader.readAsDataURL(file);
+  }
+
+  async function saveImage(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!title.trim() || !dataUrl) {
+      setError("Add a title and choose an image first.");
+      return;
+    }
+    const image: StoredImage = { id: `image-${Date.now()}`, title: title.trim(), category: category.trim() || "Maps", dataUrl, createdAt: new Date().toISOString() };
+    try {
+      await putStoredImage(image);
+      setImages((current) => [image, ...current]);
+      setTitle("");
+      setCategory("Maps");
+      setDataUrl(null);
+      setError(null);
+      setIsAdding(false);
+    } catch {
+      setError("This browser could not save the image offline.");
+    }
+  }
+
+  async function deleteImage(id: string) {
+    try { await removeStoredImage(id); } catch { /* The UI still removes the local item. */ }
+    setImages((current) => current.filter((image) => image.id !== id));
+  }
+
+  return <section className="image-library"><div className="section-row"><div><p className="section-label">OFFLINE REFERENCES</p><h3>Image library</h3></div><button className="plain-add" type="button" onClick={() => { setIsAdding((value) => !value); setError(null); }}><Icon name="plus" /> {isAdding ? "Close" : "Add image"}</button></div><p className="image-library-intro">Save campus maps, bus diagrams, room directions, or screenshots you’ll want even without a signal.</p>{isAdding && <form className="image-form" onSubmit={saveImage}><label className="image-picker"><input type="file" accept="image/png,image/jpeg,image/webp" onChange={handleFile} /><span className="image-picker-icon"><Icon name="camera" /></span><strong>{dataUrl ? "Image selected" : "Choose an image"}</strong><small>Up to 12 MB · stored on this device</small></label><label><span>Title</span><input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Main campus map" /></label><label><span>Category</span><input value={category} onChange={(event) => setCategory(event.target.value)} placeholder="Maps" /></label><button className="primary-button" type="submit">Save image <Icon name="arrow" /></button>{error && <p className="form-error" role="alert">{error}</p>}</form>}{images.length === 0 && !isAdding && <div className="links-empty"><span className="links-empty-icon"><Icon name="camera" /></span><div><strong>Your offline images will appear here.</strong><p>Add your first campus map or travel reference.</p></div></div>}{images.length > 0 && <div className="image-grid">{images.map((image) => <article className="saved-image" key={image.id}><a href={image.dataUrl} target="_blank" rel="noreferrer"><img src={image.dataUrl} alt={image.title} /></a><div className="saved-image-footer"><div><span>{image.category}</span><strong>{image.title}</strong></div><button className="delete-link" type="button" onClick={() => deleteImage(image.id)} aria-label={`Delete ${image.title}`}>×</button></div></article>)}</div>}</section>;
 }
 
 function UsefulLinksCard({ links, setLinks }: { links: UsefulLink[]; setLinks: React.Dispatch<React.SetStateAction<UsefulLink[]>> }) {
@@ -298,6 +368,48 @@ function EmergencyView() {
 
 function EmergencyCard({ label, value, detail }: { label: string; value: string; detail: string }) { return <article className="emergency-card"><span className="card-label">{label}</span><strong>{value}</strong><p>{detail}</p><button type="button">Edit <Icon name="arrow" /></button></article>; }
 function NavButton({ active, icon, label, onClick }: { active: boolean; icon: "translate" | "book" | "trip" | "emergency"; label: string; onClick: () => void }) { return <button className={`nav-button ${active ? "active" : ""}`} onClick={onClick} type="button"><Icon name={icon} /><span>{label}</span></button>; }
+function openImageDatabase(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    if (!("indexedDB" in window)) {
+      reject(new Error("IndexedDB is unavailable"));
+      return;
+    }
+    const request = window.indexedDB.open(IMAGE_DB_NAME, 1);
+    request.onupgradeneeded = () => request.result.createObjectStore(IMAGE_STORE_NAME, { keyPath: "id" });
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error ?? new Error("Could not open image storage"));
+  });
+}
+
+async function loadStoredImages(): Promise<StoredImage[]> {
+  const database = await openImageDatabase();
+  return new Promise((resolve, reject) => {
+    const request = database.transaction(IMAGE_STORE_NAME, "readonly").objectStore(IMAGE_STORE_NAME).getAll();
+    request.onsuccess = () => resolve((request.result as StoredImage[]).sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
+    request.onerror = () => reject(request.error ?? new Error("Could not load saved images"));
+  });
+}
+
+async function putStoredImage(image: StoredImage): Promise<void> {
+  const database = await openImageDatabase();
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction(IMAGE_STORE_NAME, "readwrite");
+    transaction.objectStore(IMAGE_STORE_NAME).put(image);
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error ?? new Error("Could not save image"));
+  });
+}
+
+async function removeStoredImage(id: string): Promise<void> {
+  const database = await openImageDatabase();
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction(IMAGE_STORE_NAME, "readwrite");
+    transaction.objectStore(IMAGE_STORE_NAME).delete(id);
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error ?? new Error("Could not remove image"));
+  });
+}
+
 function loadStorage<T>(key: string, fallback: T): T { try { const stored = localStorage.getItem(key); return stored ? JSON.parse(stored) as T : fallback; } catch { return fallback; } }
 
 export default App;
