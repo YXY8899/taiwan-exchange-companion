@@ -25,6 +25,12 @@ export default defineConfig(({ mode }) => {
   // Only this Node-side development server can access OPENAI_API_KEY. Vite never
   // exposes variables without the VITE_ prefix to the browser bundle.
   const apiKey = loadEnv(mode, ".", "OPENAI_").OPENAI_API_KEY;
+  const profileEnv = loadEnv(mode, ".", "EXCHANGE_PROFILE_");
+  const profileSeed = {
+    name: profileEnv.EXCHANGE_PROFILE_NAME ?? "",
+    studentId: profileEnv.EXCHANGE_PROFILE_STUDENT_ID ?? "",
+    passportId: profileEnv.EXCHANGE_PROFILE_PASSPORT_ID ?? "",
+  };
 
   return {
     plugins: [
@@ -32,6 +38,14 @@ export default defineConfig(({ mode }) => {
       {
         name: "local-translation-api",
         configureServer(server) {
+          server.middlewares.use("/api/profile", (request: any, response: any, next: any) => {
+            if (request.method !== "GET") {
+              next();
+              return;
+            }
+            sendJson(response, 200, profileSeed);
+          });
+
           server.middlewares.use("/api/translate", async (request: any, response: any, next: any) => {
             if (request.method !== "POST") {
               next();
@@ -73,7 +87,7 @@ export default defineConfig(({ mode }) => {
       },
     ],
     server: {
-      host: true,
+      host: "127.0.0.1",
       port: 5173,
     },
   };

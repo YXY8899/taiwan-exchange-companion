@@ -28,6 +28,12 @@ type TranslationApiResponse = {
   error?: string;
 };
 
+type PersonalProfile = {
+  name: string;
+  studentId: string;
+  passportId: string;
+};
+
 type TripItem = {
   id: string;
   label: string;
@@ -60,6 +66,7 @@ type StoredImage = {
 
 const IMAGE_DB_NAME = "exchange-companion-images";
 const IMAGE_STORE_NAME = "saved-images";
+const emptyPersonalProfile: PersonalProfile = { name: "", studentId: "", passportId: "" };
 
 const starterPhrases: SavedPhrase[] = [
   { id: "help", source: "請問，可以幫我嗎？", translation: "Excuse me, could you help me?", pronunciation: "Qǐngwèn, kěyǐ bāng wǒ ma?", category: "Getting around" },
@@ -108,6 +115,7 @@ function App() {
   const [expenses, setExpenses] = useState<Expense[]>(() => loadStorage("expenses", []));
   const [storedImages, setStoredImages] = useState<StoredImage[]>([]);
   const [notes, setNotes] = useState(() => localStorage.getItem("exchangeNotes") ?? "");
+  const [profile, setProfile] = useState<PersonalProfile>(() => loadStorage("personalProfile", emptyPersonalProfile));
   const [result, setResult] = useState<TranslationResult | null>(null);
   const [text, setText] = useState("");
   const [imageUrl, setImageUrl] = useState<string | null>(null);
@@ -120,10 +128,24 @@ function App() {
   useEffect(() => localStorage.setItem("tripItems", JSON.stringify(tripItems)), [tripItems]);
   useEffect(() => localStorage.setItem("usefulLinks", JSON.stringify(usefulLinks)), [usefulLinks]);
   useEffect(() => localStorage.setItem("expenses", JSON.stringify(expenses)), [expenses]);
+  useEffect(() => localStorage.setItem("personalProfile", JSON.stringify(profile)), [profile]);
   useEffect(() => {
     loadStoredImages().then(setStoredImages).catch(() => setStoredImages([]));
   }, []);
   useEffect(() => localStorage.setItem("exchangeNotes", notes), [notes]);
+  useEffect(() => {
+    fetch("/api/profile")
+      .then((response) => response.ok ? response.json() : null)
+      .then((seed: unknown) => {
+        if (!isPersonalProfile(seed)) return;
+        setProfile((current) => ({
+          name: current.name || seed.name,
+          studentId: current.studentId || seed.studentId,
+          passportId: current.passportId || seed.passportId,
+        }));
+      })
+      .catch(() => undefined);
+  }, []);
 
   const tripProgress = useMemo(() => Math.round((tripItems.filter((item) => item.done).length / tripItems.length) * 100), [tripItems]);
 
@@ -226,7 +248,7 @@ function App() {
         <div className="brand-mark" aria-label="Exchange Companion home"><span>EC</span></div>
         <div className="topbar-actions">
           <span className="offline-pill"><span className="status-dot" /> Offline kit ready</span>
-          <button className="avatar" aria-label="Open profile">Y</button>
+          <button className="avatar" type="button" onClick={() => selectTab("emergency")} aria-label="Open personal profile">Y</button>
         </div>
       </header>
 
@@ -243,7 +265,7 @@ function App() {
         {activeTab === "translate" && <TranslateView imageUrl={imageUrl} fileInputRef={fileInputRef} text={text} setText={setText} handleImage={handleImage} runTranslation={runTranslation} clearTranslationInput={clearTranslationInput} isTranslating={isTranslating} result={result} saveResult={saveResult} copyText={copyText} speak={speak} notice={notice} setNotice={setNotice} />}
         {activeTab === "phrasebook" && <PhrasebookView phrases={savedPhrases} copyText={copyText} speak={speak} />}
         {activeTab === "trip" && <TripView items={tripItems} progress={tripProgress} toggleItem={toggleTripItem} notes={notes} setNotes={setNotes} links={usefulLinks} setLinks={setUsefulLinks} expenses={expenses} setExpenses={setExpenses} images={storedImages} setImages={setStoredImages} />}
-        {activeTab === "emergency" && <EmergencyView />}
+        {activeTab === "emergency" && <EmergencyView profile={profile} setProfile={setProfile} />}
       </main>
 
       <nav className="bottom-nav" aria-label="Main navigation">
@@ -404,8 +426,24 @@ function UsefulLinksCard({ links, setLinks }: { links: UsefulLink[]; setLinks: R
   return <section className="links-card"><div className="section-row"><div><p className="section-label">YOUR SHORTCUTS</p><h3>Useful websites</h3></div><button className="plain-add" type="button" onClick={() => { setIsAdding((value) => !value); setError(null); }}><Icon name="plus" /> {isAdding ? "Close" : "Add website"}</button></div><p className="links-intro">Keep your university portal, transport pages, booking sites, and anything else you need one tap away.</p>{isAdding && <form className="link-form" onSubmit={addLink}><label><span>Website name</span><input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="University portal" /></label><label><span>Website address</span><input value={url} onChange={(event) => setUrl(event.target.value)} placeholder="portal.example.edu" inputMode="url" /></label><label><span>Category</span><input value={category} onChange={(event) => setCategory(event.target.value)} placeholder="Travel" /></label><button className="primary-button" type="submit">Save website <Icon name="arrow" /></button>{error && <p className="form-error" role="alert">{error}</p>}</form>}{links.length === 0 && !isAdding && <div className="links-empty"><span className="links-empty-icon"><Icon name="arrow" /></span><div><strong>Your shortcuts will appear here.</strong><p>Add the pages you reach for most during your exchange.</p></div></div>}{links.length > 0 && <div className="links-list">{links.map((link) => <article className="saved-link" key={link.id}><div className="link-favicon">{link.title.slice(0, 1).toUpperCase()}</div><div className="saved-link-copy"><span>{link.category}</span><strong>{link.title}</strong><small>{link.url.replace(/^https?:\/\//, "").replace(/\/$/, "")}</small></div><a className="open-link" href={link.url} target="_blank" rel="noreferrer">Open <Icon name="arrow" /></a><button className="delete-link" type="button" onClick={() => setLinks((current) => current.filter((item) => item.id !== link.id))} aria-label={`Delete ${link.title}`}>×</button></article>)}</div>}</section>;
 }
 
-function EmergencyView() {
-  return <div className="content-stack"><section className="emergency-banner"><div className="emergency-symbol"><Icon name="emergency" /></div><div><p className="section-label">ALWAYS AVAILABLE</p><h2>Your essentials, even offline.</h2><p>These details are saved on this device and don’t need a signal.</p></div></section><section className="contact-grid"><EmergencyCard label="Local emergency" value="112" detail="Police · fire · ambulance" /><EmergencyCard label="Embassy / consulate" value="Add number" detail="Tap to add your nearest contact" /><EmergencyCard label="Where I’m staying" value="Not added yet" detail="Your accommodation address" /><EmergencyCard label="My medical note" value="Not added yet" detail="Allergies and important details" /></section><section className="emergency-privacy"><Icon name="lock" /><div><strong>Your details stay yours.</strong><p>We’ll keep personal emergency information on this device by default. Cloud sync will always be opt-in.</p></div></section></div>;
+function EmergencyView({ profile, setProfile }: { profile: PersonalProfile; setProfile: React.Dispatch<React.SetStateAction<PersonalProfile>> }) {
+  return <div className="content-stack"><section className="emergency-banner"><div className="emergency-symbol"><Icon name="emergency" /></div><div><p className="section-label">ALWAYS AVAILABLE</p><h2>Your essentials, even offline.</h2><p>These details are saved on this device and don’t need a signal.</p></div></section><PersonalProfileCard profile={profile} setProfile={setProfile} /><section className="contact-grid"><EmergencyCard label="Local emergency" value="112" detail="Police · fire · ambulance" /><EmergencyCard label="Embassy / consulate" value="Add number" detail="Tap to add your nearest contact" /><EmergencyCard label="Where I’m staying" value="Not added yet" detail="Your accommodation address" /><EmergencyCard label="My medical note" value="Not added yet" detail="Allergies and important details" /></section><section className="emergency-privacy"><Icon name="lock" /><div><strong>Your details stay yours.</strong><p>We’ll keep personal emergency information on this device by default. Cloud sync will always be opt-in.</p></div></section></div>;
+}
+
+function PersonalProfileCard({ profile, setProfile }: { profile: PersonalProfile; setProfile: React.Dispatch<React.SetStateAction<PersonalProfile>> }) {
+  return <section className="profile-card">
+    <div className="section-row">
+      <div><p className="section-label">PERSONAL PROFILE</p><h3>Your key details</h3></div>
+      <span className="offline-label"><Icon name="lock" /> This device only</span>
+    </div>
+    <p className="profile-intro">Keep your exchange identifiers where you can find them. Changes save automatically in this browser.</p>
+    <div className="profile-grid">
+      <label><span>Full name</span><input value={profile.name} onChange={(event) => setProfile((current) => ({ ...current, name: event.target.value }))} autoComplete="name" /></label>
+      <label><span>Student ID</span><input value={profile.studentId} onChange={(event) => setProfile((current) => ({ ...current, studentId: event.target.value }))} inputMode="numeric" autoComplete="off" /></label>
+      <label><span>Passport ID</span><input value={profile.passportId} onChange={(event) => setProfile((current) => ({ ...current, passportId: event.target.value.toUpperCase() }))} autoComplete="off" /></label>
+    </div>
+    <p className="profile-private"><Icon name="lock" /> This profile is stored locally and is not sent with translation requests.</p>
+  </section>;
 }
 
 function EmergencyCard({ label, value, detail }: { label: string; value: string; detail: string }) { return <article className="emergency-card"><span className="card-label">{label}</span><strong>{value}</strong><p>{detail}</p><button type="button">Edit <Icon name="arrow" /></button></article>; }
@@ -459,6 +497,13 @@ function readFileAsDataUrl(file: File): Promise<string> {
     reader.onerror = () => reject(reader.error ?? new Error("Could not read image"));
     reader.readAsDataURL(file);
   });
+}
+
+function isPersonalProfile(value: unknown): value is PersonalProfile {
+  return typeof value === "object" && value !== null
+    && "name" in value && typeof value.name === "string"
+    && "studentId" in value && typeof value.studentId === "string"
+    && "passportId" in value && typeof value.passportId === "string";
 }
 
 function loadStorage<T>(key: string, fallback: T): T { try { const stored = localStorage.getItem(key); return stored ? JSON.parse(stored) as T : fallback; } catch { return fallback; } }
