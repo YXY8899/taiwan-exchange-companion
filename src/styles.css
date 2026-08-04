@@ -58,6 +58,14 @@ h1 { max-width: 640px; margin-bottom: 14px; color: var(--dark); font: 600 clamp(
 .language-flag { width: 29px; height: 29px; display: grid; place-items: center; border-radius: 9px; color: #b84e39; background: #f8ddd2; font-size: 13px; font-weight: 700; }
 .language-flag.target { color: #507478; background: #d8eaeb; }
 .chevron { margin-left: auto; color: #a2aaa4; }
+.direction-switch { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; margin: 20px 0 15px; }
+.direction-option { min-width: 0; padding: 12px; border: 1px solid #e0e4dd; border-radius: 13px; color: #718078; background: #fbfaf6; text-align: left; }
+.direction-option:hover { border-color: #b7c9b9; background: #f3f7f2; }
+.direction-option.active { border-color: #8cb092; color: #2d6242; background: #eaf2ea; box-shadow: 0 0 0 3px #8baa9117; }
+.direction-option span, .direction-option small { display: block; font: 500 9px 'DM Mono', monospace; letter-spacing: .08em; }
+.direction-option span { color: #9aa49d; }
+.direction-option strong { display: block; margin: 4px 0 3px; color: var(--ink); font-size: 13px; }
+.direction-option small { color: #829087; font-family: 'DM Sans', sans-serif; letter-spacing: 0; font-size: 10px; }
 .text-input-wrap { position: relative; }
 .text-input-wrap textarea, .notes-card textarea { width: 100%; resize: vertical; border: 1px solid #e2e4de; border-radius: 12px; outline: none; color: var(--ink); background: #fbfaf6; font-size: 13px; line-height: 1.5; }
 .text-input-wrap textarea { min-height: 66px; padding: 13px 15px 23px; }

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 type Tab = "translate" | "phrasebook" | "trip" | "emergency";
+type TranslationMode = "readChinese" | "speakChinese";
 
 type SavedPhrase = {
   id: string;
@@ -17,6 +18,7 @@ type TranslationResult = {
   pronunciation: string;
   context: string;
   language: string;
+  mode: TranslationMode;
 };
 
 type TranslationApiResponse = {
@@ -135,6 +137,7 @@ function App() {
   const [profile, setProfile] = useState<PersonalProfile>(() => loadStorage("personalProfile", emptyPersonalProfile));
   const [medicalInfo, setMedicalInfo] = useState<MedicalInfo>(() => loadStorage("medicalInfo", emptyMedicalInfo));
   const [result, setResult] = useState<TranslationResult | null>(null);
+  const [translationMode, setTranslationMode] = useState<TranslationMode>("readChinese");
   const [isShowingTranslation, setIsShowingTranslation] = useState(false);
   const [text, setText] = useState("");
   const [imageUrl, setImageUrl] = useState<string | null>(null);
@@ -212,7 +215,7 @@ function App() {
       const response = await fetch("/api/translate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: text.trim(), image: imageUrl }),
+        body: JSON.stringify({ text: text.trim(), image: imageUrl, mode: translationMode }),
       });
       const data = await response.json().catch(() => null) as TranslationApiResponse | null;
       if (!response.ok || !data || typeof data.source_text !== "string" || typeof data.translated_text !== "string") {
@@ -224,6 +227,7 @@ function App() {
         pronunciation: data.romanization || "No pronunciation needed.",
         context: data.context || "Translation complete.",
         language: data.detected_language || "Detected language",
+        mode: translationMode,
       });
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "The translator could not complete that request.");
@@ -258,7 +262,9 @@ function App() {
       return;
     }
     window.speechSynthesis.cancel();
-    window.speechSynthesis.speak(new SpeechSynthesisUtterance(value));
+    const utterance = new SpeechSynthesisUtterance(value);
+    if (/[\u3400-\u9fff]/.test(value)) utterance.lang = "zh-TW";
+    window.speechSynthesis.speak(utterance);
   }
 
   function toggleTripItem(id: string) {
@@ -285,7 +291,7 @@ function App() {
           <div className="date-card"><span>EXCHANGE DAY</span><strong>01</strong><small>Getting ready</small></div>
         </section>
 
-        {activeTab === "translate" && <TranslateView imageUrl={imageUrl} fileInputRef={fileInputRef} text={text} setText={setText} handleImage={handleImage} runTranslation={runTranslation} clearTranslationInput={clearTranslationInput} openShowTranslation={() => setIsShowingTranslation(true)} isTranslating={isTranslating} result={result} saveResult={saveResult} copyText={copyText} speak={speak} notice={notice} setNotice={setNotice} />}
+        {activeTab === "translate" && <TranslateView imageUrl={imageUrl} fileInputRef={fileInputRef} text={text} setText={setText} translationMode={translationMode} setTranslationMode={setTranslationMode} handleImage={handleImage} runTranslation={runTranslation} clearTranslationInput={clearTranslationInput} openShowTranslation={() => setIsShowingTranslation(true)} isTranslating={isTranslating} result={result} saveResult={saveResult} copyText={copyText} speak={speak} notice={notice} setNotice={setNotice} />}
         {activeTab === "phrasebook" && <PhrasebookView phrases={savedPhrases} copyText={copyText} speak={speak} />}
         {activeTab === "trip" && <TripView items={tripItems} progress={tripProgress} toggleItem={toggleTripItem} notes={notes} setNotes={setNotes} links={usefulLinks} setLinks={setUsefulLinks} expenses={expenses} setExpenses={setExpenses} addresses={addresses} setAddresses={setAddresses} images={storedImages} setImages={setStoredImages} />}
         {activeTab === "emergency" && <EmergencyView profile={profile} setProfile={setProfile} medicalInfo={medicalInfo} setMedicalInfo={setMedicalInfo} />}
@@ -303,7 +309,7 @@ function App() {
   );
 }
 
-function TranslateView({ imageUrl, fileInputRef, text, setText, handleImage, runTranslation, clearTranslationInput, openShowTranslation, isTranslating, result, saveResult, copyText, speak, notice, setNotice }: { imageUrl: string | null; fileInputRef: React.RefObject<HTMLInputElement | null>; text: string; setText: (value: string) => void; handleImage: (event: React.ChangeEvent<HTMLInputElement>) => void; runTranslation: () => void; clearTranslationInput: () => void; openShowTranslation: () => void; isTranslating: boolean; result: TranslationResult | null; saveResult: () => void; copyText: (value: string) => void; speak: (value: string) => void; notice: string | null; setNotice: (value: string | null) => void }) {
+function TranslateView({ imageUrl, fileInputRef, text, setText, translationMode, setTranslationMode, handleImage, runTranslation, clearTranslationInput, openShowTranslation, isTranslating, result, saveResult, copyText, speak, notice, setNotice }: { imageUrl: string | null; fileInputRef: React.RefObject<HTMLInputElement | null>; text: string; setText: (value: string) => void; translationMode: TranslationMode; setTranslationMode: (mode: TranslationMode) => void; handleImage: (event: React.ChangeEvent<HTMLInputElement>) => void; runTranslation: () => void; clearTranslationInput: () => void; openShowTranslation: () => void; isTranslating: boolean; result: TranslationResult | null; saveResult: () => void; copyText: (value: string) => void; speak: (value: string) => void; notice: string | null; setNotice: (value: string | null) => void }) {
   return <div className="translate-layout">
     <section className="hero-card">
       <div className="hero-card-copy"><span className="hero-kicker"><Icon name="spark" /> PHOTO TRANSLATOR <span className="demo-badge">LOCAL TEST</span></span><h2>Point, pause, understand.</h2><p>Take a photo of a menu, sign, or letter. We’ll turn the important bits into something you can use.</p></div>
@@ -317,19 +323,19 @@ function TranslateView({ imageUrl, fileInputRef, text, setText, handleImage, run
         {imageUrl ? <img src={imageUrl} alt="Selected translation source" /> : <><span className="upload-icon"><Icon name="camera" /></span><strong>Tap to take a photo</strong><span>or choose one from your camera roll</span></>}
         {imageUrl && <span className="image-overlay"><Icon name="camera" /> Change photo</span>}
       </button>
-      <div className="language-row"><div className="language-select"><span className="language-flag">中</span><div><small>FROM</small><strong>Auto-detect</strong></div><span className="chevron">⌄</span></div><Icon name="arrow" /><div className="language-select"><span className="language-flag target">A</span><div><small>SMART DIRECTION</small><strong>English ↔ 中文</strong></div><span className="chevron">⌄</span></div></div>
-      <div className="text-input-wrap"><textarea value={text} onChange={(event) => setText(event.target.value)} placeholder="Or type a phrase to translate..." rows={2} /><span>{text.length}/500</span></div>
+      <div className="direction-switch" aria-label="Translation direction"><button className={`direction-option ${translationMode === "readChinese" ? "active" : ""}`} type="button" onClick={() => setTranslationMode("readChinese")}><span>READ CHINESE</span><strong>中文 → English</strong><small>Understand signs, messages, and menus</small></button><button className={`direction-option ${translationMode === "speakChinese" ? "active" : ""}`} type="button" onClick={() => setTranslationMode("speakChinese")}><span>SPEAK CHINESE</span><strong>English → 中文</strong><small>Natural Chinese + pinyin</small></button></div>
+      <div className="text-input-wrap"><textarea value={text} onChange={(event) => setText(event.target.value)} placeholder={translationMode === "speakChinese" ? "Type what you want to say in English..." : "Or type a phrase to translate..."} rows={2} /><span>{text.length}/500</span></div>
       <div className="action-row"><button className="secondary-button" type="button" onClick={clearTranslationInput} disabled={!text && !imageUrl}>Clear</button><button className="primary-button" type="button" onClick={runTranslation} disabled={isTranslating}>{isTranslating ? <><span className="spinner" /> Translating...</> : <>Translate <Icon name="arrow" /></>}</button></div>
       {notice && <p className="inline-notice" role="status">{notice}</p>}
     </section>
 
-    {result && <section className="result-card"><div className="result-top"><div><p className="section-label">TRANSLATION RESULT</p><span className="result-language"><span className="language-dot" /> {result.language}</span></div><button className="icon-button" type="button" aria-label="Save phrase" onClick={saveResult}><Icon name="plus" /></button></div><div className="result-block"><span>ORIGINAL</span><p className="source-text">{result.source}</p><div className="result-actions"><button onClick={() => copyText(result.source)} type="button"><Icon name="copy" /> Copy</button><button onClick={() => speak(result.source)} type="button"><Icon name="volume" /> Listen</button></div></div><div className="result-divider" /><div className="result-block"><span>TRANSLATION</span><p className="translation-text">{result.translation}</p><p className="pronunciation">{result.pronunciation}</p><div className="result-actions"><button onClick={openShowTranslation} type="button"><Icon name="arrow" /> Show this</button><button onClick={() => copyText(result.translation)} type="button"><Icon name="copy" /> Copy translation</button><button onClick={() => speak(result.translation)} type="button"><Icon name="volume" /> Hear it</button></div></div><div className="context-note"><Icon name="spark" /><p><strong>Context note</strong>{result.context}</p></div></section>}
+    {result && <section className="result-card"><div className="result-top"><div><p className="section-label">TRANSLATION RESULT</p><span className="result-language"><span className="language-dot" /> {result.language}</span></div><button className="icon-button" type="button" aria-label="Save phrase" onClick={saveResult}><Icon name="plus" /></button></div><div className="result-block"><span>ORIGINAL</span><p className="source-text">{result.source}</p><div className="result-actions"><button onClick={() => copyText(result.source)} type="button"><Icon name="copy" /> Copy</button><button onClick={() => speak(result.source)} type="button"><Icon name="volume" /> Listen</button></div></div><div className="result-divider" /><div className="result-block"><span>{result.mode === "speakChinese" ? "TRADITIONAL CHINESE" : "TRANSLATION"}</span><p className="translation-text">{result.translation}</p>{result.pronunciation !== "No pronunciation needed." && <p className="pronunciation">{result.mode === "speakChinese" ? `Pinyin: ${result.pronunciation}` : result.pronunciation}</p>}<div className="result-actions"><button onClick={openShowTranslation} type="button"><Icon name="arrow" /> Show this</button><button onClick={() => copyText(result.translation)} type="button"><Icon name="copy" /> Copy translation</button><button onClick={() => speak(result.translation)} type="button"><Icon name="volume" /> Hear it</button></div></div><div className="context-note"><Icon name="spark" /><p><strong>Context note</strong>{result.context}</p></div></section>}
     {!result && <section className="tip-strip"><div className="tip-icon"><Icon name="spark" /></div><div><strong>Small tip for better translations</strong><p>Fill the frame, keep the text flat, and include a little surrounding context.</p></div><Icon name="arrow" /></section>}
   </div>;
 }
 
 function ShowTranslationModal({ result, speak, onClose }: { result: TranslationResult; speak: (value: string) => void; onClose: () => void }) {
-  return <div className="show-translation-backdrop" role="presentation"><section className="show-translation-modal" role="dialog" aria-modal="true" aria-label="Large translation display"><button className="show-translation-close" type="button" onClick={onClose}>Close <span aria-hidden="true">×</span></button><p className="section-label">SHOW THIS</p><p className="show-translation-source">{result.source}</p><h2>{result.translation}</h2>{result.pronunciation !== "No pronunciation needed." && <p className="show-translation-pronunciation">{result.pronunciation}</p>}<button className="show-translation-speak" type="button" onClick={() => speak(result.translation)}><Icon name="volume" /> Play aloud</button><p className="show-translation-hint">Turn your screen toward the person you are speaking with.</p></section></div>;
+  return <div className="show-translation-backdrop" role="presentation"><section className="show-translation-modal" role="dialog" aria-modal="true" aria-label="Large translation display"><button className="show-translation-close" type="button" onClick={onClose}>Close <span aria-hidden="true">×</span></button><p className="section-label">SHOW THIS</p><p className="show-translation-source">{result.source}</p><h2>{result.translation}</h2>{result.pronunciation !== "No pronunciation needed." && <p className="show-translation-pronunciation">{result.mode === "speakChinese" ? `Pinyin: ${result.pronunciation}` : result.pronunciation}</p>}<button className="show-translation-speak" type="button" onClick={() => speak(result.translation)}><Icon name="volume" /> Play aloud</button><p className="show-translation-hint">Turn your screen toward the person you are speaking with.</p></section></div>;
 }
 
 function PhrasebookView({ phrases, copyText, speak }: { phrases: SavedPhrase[]; copyText: (value: string) => void; speak: (value: string) => void }) {
