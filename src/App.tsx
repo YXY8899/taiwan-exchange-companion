@@ -34,6 +34,21 @@ type PersonalProfile = {
   passportId: string;
 };
 
+type SavedAddress = {
+  id: string;
+  label: string;
+  category: string;
+  englishAddress: string;
+  localAddress: string;
+};
+
+type MedicalInfo = {
+  allergies: string;
+  medications: string;
+  bloodType: string;
+  emergencyContact: string;
+};
+
 type TripItem = {
   id: string;
   label: string;
@@ -67,6 +82,7 @@ type StoredImage = {
 const IMAGE_DB_NAME = "exchange-companion-images";
 const IMAGE_STORE_NAME = "saved-images";
 const emptyPersonalProfile: PersonalProfile = { name: "", studentId: "", passportId: "" };
+const emptyMedicalInfo: MedicalInfo = { allergies: "", medications: "", bloodType: "", emergencyContact: "" };
 
 const starterPhrases: SavedPhrase[] = [
   { id: "help", source: "請問，可以幫我嗎？", translation: "Excuse me, could you help me?", pronunciation: "Qǐngwèn, kěyǐ bāng wǒ ma?", category: "Getting around" },
@@ -113,10 +129,13 @@ function App() {
   const [tripItems, setTripItems] = useState<TripItem[]>(() => loadStorage("tripItems", initialTripItems));
   const [usefulLinks, setUsefulLinks] = useState<UsefulLink[]>(() => loadStorage("usefulLinks", []));
   const [expenses, setExpenses] = useState<Expense[]>(() => loadStorage("expenses", []));
+  const [addresses, setAddresses] = useState<SavedAddress[]>(() => loadStorage("savedAddresses", []));
   const [storedImages, setStoredImages] = useState<StoredImage[]>([]);
   const [notes, setNotes] = useState(() => localStorage.getItem("exchangeNotes") ?? "");
   const [profile, setProfile] = useState<PersonalProfile>(() => loadStorage("personalProfile", emptyPersonalProfile));
+  const [medicalInfo, setMedicalInfo] = useState<MedicalInfo>(() => loadStorage("medicalInfo", emptyMedicalInfo));
   const [result, setResult] = useState<TranslationResult | null>(null);
+  const [isShowingTranslation, setIsShowingTranslation] = useState(false);
   const [text, setText] = useState("");
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [isTranslating, setIsTranslating] = useState(false);
@@ -128,7 +147,9 @@ function App() {
   useEffect(() => localStorage.setItem("tripItems", JSON.stringify(tripItems)), [tripItems]);
   useEffect(() => localStorage.setItem("usefulLinks", JSON.stringify(usefulLinks)), [usefulLinks]);
   useEffect(() => localStorage.setItem("expenses", JSON.stringify(expenses)), [expenses]);
+  useEffect(() => localStorage.setItem("savedAddresses", JSON.stringify(addresses)), [addresses]);
   useEffect(() => localStorage.setItem("personalProfile", JSON.stringify(profile)), [profile]);
+  useEffect(() => localStorage.setItem("medicalInfo", JSON.stringify(medicalInfo)), [medicalInfo]);
   useEffect(() => {
     loadStoredImages().then(setStoredImages).catch(() => setStoredImages([]));
   }, []);
@@ -185,6 +206,7 @@ function App() {
     setIsTranslating(true);
     setNotice(null);
     setResult(null);
+    setIsShowingTranslation(false);
 
     try {
       const response = await fetch("/api/translate", {
@@ -214,6 +236,7 @@ function App() {
     setText("");
     setImageUrl(null);
     setResult(null);
+    setIsShowingTranslation(false);
     setNotice(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
@@ -262,11 +285,13 @@ function App() {
           <div className="date-card"><span>EXCHANGE DAY</span><strong>01</strong><small>Getting ready</small></div>
         </section>
 
-        {activeTab === "translate" && <TranslateView imageUrl={imageUrl} fileInputRef={fileInputRef} text={text} setText={setText} handleImage={handleImage} runTranslation={runTranslation} clearTranslationInput={clearTranslationInput} isTranslating={isTranslating} result={result} saveResult={saveResult} copyText={copyText} speak={speak} notice={notice} setNotice={setNotice} />}
+        {activeTab === "translate" && <TranslateView imageUrl={imageUrl} fileInputRef={fileInputRef} text={text} setText={setText} handleImage={handleImage} runTranslation={runTranslation} clearTranslationInput={clearTranslationInput} openShowTranslation={() => setIsShowingTranslation(true)} isTranslating={isTranslating} result={result} saveResult={saveResult} copyText={copyText} speak={speak} notice={notice} setNotice={setNotice} />}
         {activeTab === "phrasebook" && <PhrasebookView phrases={savedPhrases} copyText={copyText} speak={speak} />}
-        {activeTab === "trip" && <TripView items={tripItems} progress={tripProgress} toggleItem={toggleTripItem} notes={notes} setNotes={setNotes} links={usefulLinks} setLinks={setUsefulLinks} expenses={expenses} setExpenses={setExpenses} images={storedImages} setImages={setStoredImages} />}
-        {activeTab === "emergency" && <EmergencyView profile={profile} setProfile={setProfile} />}
+        {activeTab === "trip" && <TripView items={tripItems} progress={tripProgress} toggleItem={toggleTripItem} notes={notes} setNotes={setNotes} links={usefulLinks} setLinks={setUsefulLinks} expenses={expenses} setExpenses={setExpenses} addresses={addresses} setAddresses={setAddresses} images={storedImages} setImages={setStoredImages} />}
+        {activeTab === "emergency" && <EmergencyView profile={profile} setProfile={setProfile} medicalInfo={medicalInfo} setMedicalInfo={setMedicalInfo} />}
       </main>
+
+      {isShowingTranslation && result && <ShowTranslationModal result={result} speak={speak} onClose={() => setIsShowingTranslation(false)} />}
 
       <nav className="bottom-nav" aria-label="Main navigation">
         <NavButton active={activeTab === "translate"} icon="translate" label="Translate" onClick={() => selectTab("translate")} />
@@ -278,7 +303,7 @@ function App() {
   );
 }
 
-function TranslateView({ imageUrl, fileInputRef, text, setText, handleImage, runTranslation, clearTranslationInput, isTranslating, result, saveResult, copyText, speak, notice, setNotice }: { imageUrl: string | null; fileInputRef: React.RefObject<HTMLInputElement | null>; text: string; setText: (value: string) => void; handleImage: (event: React.ChangeEvent<HTMLInputElement>) => void; runTranslation: () => void; clearTranslationInput: () => void; isTranslating: boolean; result: TranslationResult | null; saveResult: () => void; copyText: (value: string) => void; speak: (value: string) => void; notice: string | null; setNotice: (value: string | null) => void }) {
+function TranslateView({ imageUrl, fileInputRef, text, setText, handleImage, runTranslation, clearTranslationInput, openShowTranslation, isTranslating, result, saveResult, copyText, speak, notice, setNotice }: { imageUrl: string | null; fileInputRef: React.RefObject<HTMLInputElement | null>; text: string; setText: (value: string) => void; handleImage: (event: React.ChangeEvent<HTMLInputElement>) => void; runTranslation: () => void; clearTranslationInput: () => void; openShowTranslation: () => void; isTranslating: boolean; result: TranslationResult | null; saveResult: () => void; copyText: (value: string) => void; speak: (value: string) => void; notice: string | null; setNotice: (value: string | null) => void }) {
   return <div className="translate-layout">
     <section className="hero-card">
       <div className="hero-card-copy"><span className="hero-kicker"><Icon name="spark" /> PHOTO TRANSLATOR <span className="demo-badge">LOCAL TEST</span></span><h2>Point, pause, understand.</h2><p>Take a photo of a menu, sign, or letter. We’ll turn the important bits into something you can use.</p></div>
@@ -298,17 +323,21 @@ function TranslateView({ imageUrl, fileInputRef, text, setText, handleImage, run
       {notice && <p className="inline-notice" role="status">{notice}</p>}
     </section>
 
-    {result && <section className="result-card"><div className="result-top"><div><p className="section-label">TRANSLATION RESULT</p><span className="result-language"><span className="language-dot" /> {result.language}</span></div><button className="icon-button" type="button" aria-label="Save phrase" onClick={saveResult}><Icon name="plus" /></button></div><div className="result-block"><span>ORIGINAL</span><p className="source-text">{result.source}</p><div className="result-actions"><button onClick={() => copyText(result.source)} type="button"><Icon name="copy" /> Copy</button><button onClick={() => speak(result.source)} type="button"><Icon name="volume" /> Listen</button></div></div><div className="result-divider" /><div className="result-block"><span>ENGLISH</span><p className="translation-text">{result.translation}</p><p className="pronunciation">{result.pronunciation}</p><div className="result-actions"><button onClick={() => copyText(result.translation)} type="button"><Icon name="copy" /> Copy translation</button><button onClick={() => speak(result.translation)} type="button"><Icon name="volume" /> Hear it</button></div></div><div className="context-note"><Icon name="spark" /><p><strong>Context note</strong>{result.context}</p></div></section>}
+    {result && <section className="result-card"><div className="result-top"><div><p className="section-label">TRANSLATION RESULT</p><span className="result-language"><span className="language-dot" /> {result.language}</span></div><button className="icon-button" type="button" aria-label="Save phrase" onClick={saveResult}><Icon name="plus" /></button></div><div className="result-block"><span>ORIGINAL</span><p className="source-text">{result.source}</p><div className="result-actions"><button onClick={() => copyText(result.source)} type="button"><Icon name="copy" /> Copy</button><button onClick={() => speak(result.source)} type="button"><Icon name="volume" /> Listen</button></div></div><div className="result-divider" /><div className="result-block"><span>TRANSLATION</span><p className="translation-text">{result.translation}</p><p className="pronunciation">{result.pronunciation}</p><div className="result-actions"><button onClick={openShowTranslation} type="button"><Icon name="arrow" /> Show this</button><button onClick={() => copyText(result.translation)} type="button"><Icon name="copy" /> Copy translation</button><button onClick={() => speak(result.translation)} type="button"><Icon name="volume" /> Hear it</button></div></div><div className="context-note"><Icon name="spark" /><p><strong>Context note</strong>{result.context}</p></div></section>}
     {!result && <section className="tip-strip"><div className="tip-icon"><Icon name="spark" /></div><div><strong>Small tip for better translations</strong><p>Fill the frame, keep the text flat, and include a little surrounding context.</p></div><Icon name="arrow" /></section>}
   </div>;
+}
+
+function ShowTranslationModal({ result, speak, onClose }: { result: TranslationResult; speak: (value: string) => void; onClose: () => void }) {
+  return <div className="show-translation-backdrop" role="presentation"><section className="show-translation-modal" role="dialog" aria-modal="true" aria-label="Large translation display"><button className="show-translation-close" type="button" onClick={onClose}>Close <span aria-hidden="true">×</span></button><p className="section-label">SHOW THIS</p><p className="show-translation-source">{result.source}</p><h2>{result.translation}</h2>{result.pronunciation !== "No pronunciation needed." && <p className="show-translation-pronunciation">{result.pronunciation}</p>}<button className="show-translation-speak" type="button" onClick={() => speak(result.translation)}><Icon name="volume" /> Play aloud</button><p className="show-translation-hint">Turn your screen toward the person you are speaking with.</p></section></div>;
 }
 
 function PhrasebookView({ phrases, copyText, speak }: { phrases: SavedPhrase[]; copyText: (value: string) => void; speak: (value: string) => void }) {
   return <div className="content-stack"><div className="search-bar"><span>⌕</span><input placeholder="Search your phrases" /></div><div className="chip-row"><button className="filter-chip active" type="button">All phrases</button><button className="filter-chip" type="button">Food & health</button><button className="filter-chip" type="button">Getting around</button></div><div className="phrase-list">{phrases.map((phrase) => <article className="phrase-card" key={phrase.id}><div className="phrase-heading"><span className="phrase-category">{phrase.category}</span>{phrase.isNew && <span className="new-label">NEW</span>}</div><p className="phrase-source">{phrase.source}</p><p className="phrase-translation">{phrase.translation}</p><p className="phrase-pronunciation">{phrase.pronunciation}</p><div className="phrase-actions"><button type="button" onClick={() => copyText(phrase.translation)}><Icon name="copy" /> Copy</button><button type="button" onClick={() => speak(phrase.source)}><Icon name="volume" /> Listen</button></div></article>)}</div></div>;
 }
 
-function TripView({ items, progress, toggleItem, notes, setNotes, links, setLinks, expenses, setExpenses, images, setImages }: { items: TripItem[]; progress: number; toggleItem: (id: string) => void; notes: string; setNotes: (value: string) => void; links: UsefulLink[]; setLinks: React.Dispatch<React.SetStateAction<UsefulLink[]>>; expenses: Expense[]; setExpenses: React.Dispatch<React.SetStateAction<Expense[]>>; images: StoredImage[]; setImages: React.Dispatch<React.SetStateAction<StoredImage[]>> }) {
-  return <div className="content-stack"><section className="progress-card"><div><p className="section-label">ARRIVAL CHECKLIST</p><h3>{progress === 100 ? "You’re all set." : "One thoughtful step at a time."}</h3><p>{items.filter((item) => item.done).length} of {items.length} essentials ready</p></div><div className="progress-ring" style={{ "--progress": `${progress * 3.6}deg` } as React.CSSProperties}><strong>{progress}%</strong><span>ready</span></div></section><section className="checklist-card"><div className="section-row"><div><p className="section-label">BEFORE YOU GO</p><h3>Your essentials</h3></div><button className="plain-add" type="button"><Icon name="plus" /> Add</button></div><div className="checklist">{items.map((item) => <button key={item.id} className={`check-item ${item.done ? "done" : ""}`} type="button" onClick={() => toggleItem(item.id)}><span className="check-box">{item.done && <Icon name="check" />}</span><span>{item.label}</span></button>)}</div></section><ExpenseTracker expenses={expenses} setExpenses={setExpenses} /><ImageLibrary images={images} setImages={setImages} /><section className="notes-card"><div className="section-row"><div><p className="section-label">A NOTE TO YOUR FUTURE SELF</p><h3>Keep it somewhere easy.</h3></div><span className="offline-label"><Icon name="lock" /> Private</span></div><textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Your first address, a reminder, or something you don’t want to forget..." rows={4} /></section><UsefulLinksCard links={links} setLinks={setLinks} /></div>;
+function TripView({ items, progress, toggleItem, notes, setNotes, links, setLinks, expenses, setExpenses, addresses, setAddresses, images, setImages }: { items: TripItem[]; progress: number; toggleItem: (id: string) => void; notes: string; setNotes: (value: string) => void; links: UsefulLink[]; setLinks: React.Dispatch<React.SetStateAction<UsefulLink[]>>; expenses: Expense[]; setExpenses: React.Dispatch<React.SetStateAction<Expense[]>>; addresses: SavedAddress[]; setAddresses: React.Dispatch<React.SetStateAction<SavedAddress[]>>; images: StoredImage[]; setImages: React.Dispatch<React.SetStateAction<StoredImage[]>> }) {
+  return <div className="content-stack"><section className="progress-card"><div><p className="section-label">ARRIVAL CHECKLIST</p><h3>{progress === 100 ? "You’re all set." : "One thoughtful step at a time."}</h3><p>{items.filter((item) => item.done).length} of {items.length} essentials ready</p></div><div className="progress-ring" style={{ "--progress": `${progress * 3.6}deg` } as React.CSSProperties}><strong>{progress}%</strong><span>ready</span></div></section><section className="checklist-card"><div className="section-row"><div><p className="section-label">BEFORE YOU GO</p><h3>Your essentials</h3></div><button className="plain-add" type="button"><Icon name="plus" /> Add</button></div><div className="checklist">{items.map((item) => <button key={item.id} className={`check-item ${item.done ? "done" : ""}`} type="button" onClick={() => toggleItem(item.id)}><span className="check-box">{item.done && <Icon name="check" />}</span><span>{item.label}</span></button>)}</div></section><ExpenseTracker expenses={expenses} setExpenses={setExpenses} /><AddressBook addresses={addresses} setAddresses={setAddresses} /><ImageLibrary images={images} setImages={setImages} /><section className="notes-card"><div className="section-row"><div><p className="section-label">A NOTE TO YOUR FUTURE SELF</p><h3>Keep it somewhere easy.</h3></div><span className="offline-label"><Icon name="lock" /> Private</span></div><textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Your first address, a reminder, or something you don’t want to forget..." rows={4} /></section><UsefulLinksCard links={links} setLinks={setLinks} /></div>;
 }
 
 function ExpenseTracker({ expenses, setExpenses }: { expenses: Expense[]; setExpenses: React.Dispatch<React.SetStateAction<Expense[]>> }) {
@@ -336,6 +365,32 @@ function ExpenseTracker({ expenses, setExpenses }: { expenses: Expense[]; setExp
   }
 
   return <section className="expense-card"><div className="section-row"><div><p className="section-label">TRIP SPENDING</p><h3>Keep an easy eye on it.</h3></div><button className="plain-add" type="button" onClick={() => { setIsAdding((value) => !value); setError(null); }}><Icon name="plus" /> {isAdding ? "Close" : "Add expense"}</button></div><div className="expense-summary"><div><span>Total recorded</span><strong>{currency} {total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></div><span className="expense-count">{expenses.length} {expenses.length === 1 ? "entry" : "entries"}</span></div>{isAdding && <form className="expense-form" onSubmit={addExpense}><label><span>Amount</span><input value={amount} onChange={(event) => setAmount(event.target.value)} type="number" inputMode="decimal" min="0" step="0.01" placeholder="0.00" /></label><label><span>Currency</span><select value={currency} onChange={(event) => setCurrency(event.target.value)}><option>TWD</option><option>USD</option><option>EUR</option><option>GBP</option><option>SGD</option><option>JPY</option></select></label><label><span>Category</span><select value={category} onChange={(event) => setCategory(event.target.value)}><option>Food</option><option>Transport</option><option>Accommodation</option><option>Shopping</option><option>Study</option><option>Other</option></select></label><label><span>Date</span><input value={date} onChange={(event) => setDate(event.target.value)} type="date" /></label><label className="expense-note-field"><span>Note (optional)</span><input value={note} onChange={(event) => setNote(event.target.value)} placeholder="Night market snacks" /></label><button className="primary-button" type="submit">Save expense <Icon name="arrow" /></button>{error && <p className="form-error" role="alert">{error}</p>}</form>}{expenses.length > 0 && <div className="expense-list">{expenses.slice(0, 6).map((expense) => <article className="expense-row" key={expense.id}><div className="expense-category-dot">{expense.category.slice(0, 1)}</div><div className="expense-copy"><strong>{expense.note || expense.category}</strong><span>{expense.category} · {expense.date}</span></div><b>{expense.currency} {expense.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</b><button className="delete-link" type="button" onClick={() => setExpenses((current) => current.filter((item) => item.id !== expense.id))} aria-label={`Delete ${expense.note || expense.category} expense`}>×</button></article>)}</div>}</section>;
+}
+
+function AddressBook({ addresses, setAddresses }: { addresses: SavedAddress[]; setAddresses: React.Dispatch<React.SetStateAction<SavedAddress[]>> }) {
+  const [label, setLabel] = useState("");
+  const [category, setCategory] = useState("Dorm");
+  const [englishAddress, setEnglishAddress] = useState("");
+  const [localAddress, setLocalAddress] = useState("");
+  const [isAdding, setIsAdding] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function addAddress(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!label.trim() || !englishAddress.trim()) {
+      setError("Add a location name and its English address first.");
+      return;
+    }
+    setAddresses((current) => [{ id: `address-${Date.now()}`, label: label.trim(), category: category.trim() || "Address", englishAddress: englishAddress.trim(), localAddress: localAddress.trim() }, ...current]);
+    setLabel("");
+    setCategory("Dorm");
+    setEnglishAddress("");
+    setLocalAddress("");
+    setError(null);
+    setIsAdding(false);
+  }
+
+  return <section className="address-book"><div className="section-row"><div><p className="section-label">PLACE CARDS</p><h3>Addresses you can show</h3></div><button className="plain-add" type="button" onClick={() => { setIsAdding((value) => !value); setError(null); }}><Icon name="plus" /> {isAdding ? "Close" : "Add address"}</button></div><p className="address-intro">Save your dorm, university, hospital, or airport in English and the local language for quick sharing.</p>{isAdding && <form className="address-form" onSubmit={addAddress}><label><span>Place name</span><input value={label} onChange={(event) => setLabel(event.target.value)} placeholder="Main campus" /></label><label><span>Category</span><input value={category} onChange={(event) => setCategory(event.target.value)} placeholder="Dorm" /></label><label className="address-wide"><span>English address</span><input value={englishAddress} onChange={(event) => setEnglishAddress(event.target.value)} placeholder="Street, district, city" /></label><label className="address-wide"><span>Chinese / local address (optional)</span><input value={localAddress} onChange={(event) => setLocalAddress(event.target.value)} placeholder="Paste the local-language address" /></label><button className="primary-button" type="submit">Save address <Icon name="arrow" /></button>{error && <p className="form-error" role="alert">{error}</p>}</form>}{addresses.length === 0 && !isAdding && <div className="links-empty"><span className="links-empty-icon"><Icon name="trip" /></span><div><strong>Your important places will appear here.</strong><p>Add your dorm or university address before you travel.</p></div></div>}{addresses.length > 0 && <div className="address-list">{addresses.map((address) => <article className="saved-address" key={address.id}><div className="address-marker">{address.category.slice(0, 1).toUpperCase()}</div><div className="saved-address-copy"><span>{address.category}</span><strong>{address.label}</strong><p>{address.englishAddress}</p>{address.localAddress && <p className="local-address">{address.localAddress}</p>}</div><div className="address-actions"><button type="button" onClick={() => navigator.clipboard?.writeText(address.localAddress || address.englishAddress)}>Copy</button><button className="delete-link" type="button" onClick={() => setAddresses((current) => current.filter((item) => item.id !== address.id))} aria-label={`Delete ${address.label}`}>×</button></div></article>)}</div>}</section>;
 }
 
 function ImageLibrary({ images, setImages }: { images: StoredImage[]; setImages: React.Dispatch<React.SetStateAction<StoredImage[]>> }) {
@@ -426,8 +481,24 @@ function UsefulLinksCard({ links, setLinks }: { links: UsefulLink[]; setLinks: R
   return <section className="links-card"><div className="section-row"><div><p className="section-label">YOUR SHORTCUTS</p><h3>Useful websites</h3></div><button className="plain-add" type="button" onClick={() => { setIsAdding((value) => !value); setError(null); }}><Icon name="plus" /> {isAdding ? "Close" : "Add website"}</button></div><p className="links-intro">Keep your university portal, transport pages, booking sites, and anything else you need one tap away.</p>{isAdding && <form className="link-form" onSubmit={addLink}><label><span>Website name</span><input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="University portal" /></label><label><span>Website address</span><input value={url} onChange={(event) => setUrl(event.target.value)} placeholder="portal.example.edu" inputMode="url" /></label><label><span>Category</span><input value={category} onChange={(event) => setCategory(event.target.value)} placeholder="Travel" /></label><button className="primary-button" type="submit">Save website <Icon name="arrow" /></button>{error && <p className="form-error" role="alert">{error}</p>}</form>}{links.length === 0 && !isAdding && <div className="links-empty"><span className="links-empty-icon"><Icon name="arrow" /></span><div><strong>Your shortcuts will appear here.</strong><p>Add the pages you reach for most during your exchange.</p></div></div>}{links.length > 0 && <div className="links-list">{links.map((link) => <article className="saved-link" key={link.id}><div className="link-favicon">{link.title.slice(0, 1).toUpperCase()}</div><div className="saved-link-copy"><span>{link.category}</span><strong>{link.title}</strong><small>{link.url.replace(/^https?:\/\//, "").replace(/\/$/, "")}</small></div><a className="open-link" href={link.url} target="_blank" rel="noreferrer">Open <Icon name="arrow" /></a><button className="delete-link" type="button" onClick={() => setLinks((current) => current.filter((item) => item.id !== link.id))} aria-label={`Delete ${link.title}`}>×</button></article>)}</div>}</section>;
 }
 
-function EmergencyView({ profile, setProfile }: { profile: PersonalProfile; setProfile: React.Dispatch<React.SetStateAction<PersonalProfile>> }) {
-  return <div className="content-stack"><section className="emergency-banner"><div className="emergency-symbol"><Icon name="emergency" /></div><div><p className="section-label">ALWAYS AVAILABLE</p><h2>Your essentials, even offline.</h2><p>These details are saved on this device and don’t need a signal.</p></div></section><PersonalProfileCard profile={profile} setProfile={setProfile} /><section className="contact-grid"><EmergencyCard label="Local emergency" value="112" detail="Police · fire · ambulance" /><EmergencyCard label="Embassy / consulate" value="Add number" detail="Tap to add your nearest contact" /><EmergencyCard label="Where I’m staying" value="Not added yet" detail="Your accommodation address" /><EmergencyCard label="My medical note" value="Not added yet" detail="Allergies and important details" /></section><section className="emergency-privacy"><Icon name="lock" /><div><strong>Your details stay yours.</strong><p>We’ll keep personal emergency information on this device by default. Cloud sync will always be opt-in.</p></div></section></div>;
+function EmergencyView({ profile, setProfile, medicalInfo, setMedicalInfo }: { profile: PersonalProfile; setProfile: React.Dispatch<React.SetStateAction<PersonalProfile>>; medicalInfo: MedicalInfo; setMedicalInfo: React.Dispatch<React.SetStateAction<MedicalInfo>> }) {
+  return <div className="content-stack"><section className="emergency-banner"><div className="emergency-symbol"><Icon name="emergency" /></div><div><p className="section-label">ALWAYS AVAILABLE</p><h2>Your essentials, even offline.</h2><p>These details are saved on this device and don’t need a signal.</p></div></section><PersonalProfileCard profile={profile} setProfile={setProfile} /><MedicalCard medicalInfo={medicalInfo} setMedicalInfo={setMedicalInfo} /><section className="contact-grid"><EmergencyCard label="Local emergency" value="112" detail="Police · fire · ambulance" /><EmergencyCard label="Embassy / consulate" value="Add number" detail="Tap to add your nearest contact" /><EmergencyCard label="Where I’m staying" value="Not added yet" detail="Your accommodation address" /><EmergencyCard label="My medical note" value={medicalInfo.allergies || medicalInfo.medications ? "Details saved" : "Not added yet"} detail={medicalInfo.allergies ? `Allergies: ${medicalInfo.allergies}` : "Allergies and important details"} /></section><section className="emergency-privacy"><Icon name="lock" /><div><strong>Your details stay yours.</strong><p>We’ll keep personal emergency information on this device by default. Cloud sync will always be opt-in.</p></div></section></div>;
+}
+
+function MedicalCard({ medicalInfo, setMedicalInfo }: { medicalInfo: MedicalInfo; setMedicalInfo: React.Dispatch<React.SetStateAction<MedicalInfo>> }) {
+  return <section className="medical-card">
+    <div className="section-row">
+      <div><p className="section-label">MEDICAL & ALLERGY CARD</p><h3>Important details at a glance</h3></div>
+      <span className="offline-label"><Icon name="lock" /> Private</span>
+    </div>
+    <p className="medical-intro">Add only the information you would want to find quickly in an emergency. It stays on this device.</p>
+    <div className="medical-grid">
+      <label><span>Allergies</span><input value={medicalInfo.allergies} onChange={(event) => setMedicalInfo((current) => ({ ...current, allergies: event.target.value }))} placeholder="e.g. Peanuts" /></label>
+      <label><span>Medication</span><input value={medicalInfo.medications} onChange={(event) => setMedicalInfo((current) => ({ ...current, medications: event.target.value }))} placeholder="e.g. Inhaler" /></label>
+      <label><span>Blood type</span><input value={medicalInfo.bloodType} onChange={(event) => setMedicalInfo((current) => ({ ...current, bloodType: event.target.value.toUpperCase() }))} placeholder="e.g. O+" autoComplete="off" /></label>
+      <label><span>Emergency contact</span><input value={medicalInfo.emergencyContact} onChange={(event) => setMedicalInfo((current) => ({ ...current, emergencyContact: event.target.value }))} placeholder="Name and phone number" autoComplete="tel" /></label>
+    </div>
+  </section>;
 }
 
 function PersonalProfileCard({ profile, setProfile }: { profile: PersonalProfile; setProfile: React.Dispatch<React.SetStateAction<PersonalProfile>> }) {
