@@ -1,90 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { EmergencyDetails, Expense, MedicalInfo, PersonalProfile, SavedAddress, SavedPhrase, StoredImage, Tab, TranslationHistoryItem, TranslationMode, TripItem, UsefulLink, TranslationResult } from "./types";
+import { loadStoredImages, putStoredImage, removeStoredImage, loadStorage, resizeImageForTranslation, saveStorage } from "./storage";
+import { requestTranslation, type TranslationQuality } from "./translation";
+import { decryptPrivateData, encryptPrivateData, type EncryptedVault, type PrivateVaultData } from "./secureVault";
 
-type Tab = "translate" | "phrasebook" | "trip" | "emergency";
-type TranslationMode = "readChinese" | "speakChinese";
-
-type SavedPhrase = {
-  id: string;
-  source: string;
-  translation: string;
-  pronunciation: string;
-  category: string;
-  isNew?: boolean;
-};
-
-type TranslationResult = {
-  source: string;
-  translation: string;
-  pronunciation: string;
-  context: string;
-  language: string;
-  mode: TranslationMode;
-};
-
-type TranslationApiResponse = {
-  detected_language: string;
-  source_text: string;
-  translated_text: string;
-  romanization: string;
-  context: string;
-  error?: string;
-};
-
-type PersonalProfile = {
-  name: string;
-  studentId: string;
-  passportId: string;
-};
-
-type SavedAddress = {
-  id: string;
-  label: string;
-  category: string;
-  englishAddress: string;
-  localAddress: string;
-};
-
-type MedicalInfo = {
-  allergies: string;
-  medications: string;
-  bloodType: string;
-  emergencyContact: string;
-};
-
-type TripItem = {
-  id: string;
-  label: string;
-  done: boolean;
-};
-
-type UsefulLink = {
-  id: string;
-  title: string;
-  url: string;
-  category: string;
-};
-
-type Expense = {
-  id: string;
-  amount: number;
-  currency: string;
-  category: string;
-  note: string;
-  date: string;
-};
-
-type StoredImage = {
-  id: string;
-  title: string;
-  category: string;
-  dataUrl: string;
-  createdAt: string;
-};
-
-const IMAGE_DB_NAME = "exchange-companion-images";
-const IMAGE_STORE_NAME = "saved-images";
 const emptyPersonalProfile: PersonalProfile = { name: "", studentId: "", passportId: "" };
 const emptyMedicalInfo: MedicalInfo = { allergies: "", medications: "", bloodType: "", emergencyContact: "" };
+const emptyEmergencyDetails: EmergencyDetails = { accommodation: "", university: "", embassy: "", insurance: "", localEmergency: "112" };
 
 const starterPhrases: SavedPhrase[] = [
   { id: "help", source: "請問，可以幫我嗎？", translation: "Excuse me, could you help me?", pronunciation: "Qǐngwèn, kěyǐ bāng wǒ ma?", category: "Getting around" },
@@ -133,30 +55,54 @@ function App() {
   const [expenses, setExpenses] = useState<Expense[]>(() => loadStorage("expenses", []));
   const [addresses, setAddresses] = useState<SavedAddress[]>(() => loadStorage("savedAddresses", []));
   const [storedImages, setStoredImages] = useState<StoredImage[]>([]);
-  const [notes, setNotes] = useState(() => localStorage.getItem("exchangeNotes") ?? "");
+  const [notes, setNotes] = useState(() => loadStorage("exchangeNotes", ""));
+  const [translationHistory, setTranslationHistory] = useState<TranslationHistoryItem[]>(() => loadStorage("translationHistory", []));
   const [profile, setProfile] = useState<PersonalProfile>(() => loadStorage("personalProfile", emptyPersonalProfile));
   const [medicalInfo, setMedicalInfo] = useState<MedicalInfo>(() => loadStorage("medicalInfo", emptyMedicalInfo));
+  const [emergencyDetails, setEmergencyDetails] = useState<EmergencyDetails>(() => loadStorage("emergencyDetails", emptyEmergencyDetails));
+  const [privateLocked, setPrivateLocked] = useState(() => Boolean(localStorage.getItem("privateVault")));
+  const [privatePin, setPrivatePin] = useState<string | null>(null);
+  const [privateError, setPrivateError] = useState<string | null>(null);
   const [result, setResult] = useState<TranslationResult | null>(null);
   const [translationMode, setTranslationMode] = useState<TranslationMode>("readChinese");
   const [isShowingTranslation, setIsShowingTranslation] = useState(false);
   const [text, setText] = useState("");
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [isTranslating, setIsTranslating] = useState(false);
+  const [isOnline, setIsOnline] = useState(() => navigator.onLine);
   const [notice, setNotice] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const translationAbortRef = useRef<AbortController | null>(null);
   const meta = tabMeta[activeTab];
 
-  useEffect(() => localStorage.setItem("savedPhrases", JSON.stringify(savedPhrases)), [savedPhrases]);
-  useEffect(() => localStorage.setItem("tripItems", JSON.stringify(tripItems)), [tripItems]);
-  useEffect(() => localStorage.setItem("usefulLinks", JSON.stringify(usefulLinks)), [usefulLinks]);
-  useEffect(() => localStorage.setItem("expenses", JSON.stringify(expenses)), [expenses]);
-  useEffect(() => localStorage.setItem("savedAddresses", JSON.stringify(addresses)), [addresses]);
-  useEffect(() => localStorage.setItem("personalProfile", JSON.stringify(profile)), [profile]);
-  useEffect(() => localStorage.setItem("medicalInfo", JSON.stringify(medicalInfo)), [medicalInfo]);
+  useEffect(() => saveStorage("savedPhrases", savedPhrases), [savedPhrases]);
+  useEffect(() => saveStorage("tripItems", tripItems), [tripItems]);
+  useEffect(() => saveStorage("usefulLinks", usefulLinks), [usefulLinks]);
+  useEffect(() => saveStorage("expenses", expenses), [expenses]);
+  useEffect(() => saveStorage("savedAddresses", addresses), [addresses]);
+  useEffect(() => { if (!privateLocked) saveStorage("personalProfile", profile); }, [profile, privateLocked]);
+  useEffect(() => { if (!privateLocked) saveStorage("medicalInfo", medicalInfo); }, [medicalInfo, privateLocked]);
+  useEffect(() => { if (!privateLocked) saveStorage("emergencyDetails", emergencyDetails); }, [emergencyDetails, privateLocked]);
+  useEffect(() => {
+    if (!privateLocked || !privatePin) return;
+    const data: PrivateVaultData = { profile, medicalInfo, emergencyDetails };
+    encryptPrivateData(data, privatePin).then((vault) => localStorage.setItem("privateVault", JSON.stringify(vault))).catch((error: unknown) => setPrivateError(error instanceof Error ? error.message : "Could not encrypt private details."));
+  }, [emergencyDetails, medicalInfo, privateLocked, privatePin, profile]);
   useEffect(() => {
     loadStoredImages().then(setStoredImages).catch(() => setStoredImages([]));
   }, []);
-  useEffect(() => localStorage.setItem("exchangeNotes", notes), [notes]);
+  useEffect(() => {
+    const online = () => setIsOnline(true);
+    const offline = () => setIsOnline(false);
+    window.addEventListener("online", online);
+    window.addEventListener("offline", offline);
+    return () => {
+      window.removeEventListener("online", online);
+      window.removeEventListener("offline", offline);
+    };
+  }, []);
+  useEffect(() => saveStorage("exchangeNotes", notes), [notes]);
+  useEffect(() => saveStorage("translationHistory", translationHistory), [translationHistory]);
   useEffect(() => {
     fetch("/api/profile")
       .then((response) => response.ok ? response.json() : null)
@@ -190,50 +136,62 @@ function App() {
       return;
     }
     try {
-      setImageUrl(await readFileAsDataUrl(file));
+      setImageUrl(await resizeImageForTranslation(file));
       setNotice("Photo ready. Add a little context if you want, then translate.");
     } catch {
       setNotice("That image could not be prepared. Please try another one.");
     }
   }
 
-  async function runTranslation() {
+  async function runTranslation(quality: TranslationQuality = "standard") {
     if (!imageUrl && !text.trim()) {
       setNotice("Add a photo or type a phrase first.");
+      return;
+    }
+    if (!isOnline) {
+      setNotice("You are offline. Saved phrases and trip details still work, but AI translation needs a connection.");
       return;
     }
     if (text.trim().length > 500) {
       setNotice("Keep the optional note under 500 characters.");
       return;
     }
+    translationAbortRef.current?.abort();
+    const controller = new AbortController();
+    translationAbortRef.current = controller;
     setIsTranslating(true);
     setNotice(null);
     setResult(null);
     setIsShowingTranslation(false);
 
+    const timeout = window.setTimeout(() => controller.abort(), 30_000);
     try {
-      const response = await fetch("/api/translate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: text.trim(), image: imageUrl, mode: translationMode }),
-      });
-      const data = await response.json().catch(() => null) as TranslationApiResponse | null;
-      if (!response.ok || !data || typeof data.source_text !== "string" || typeof data.translated_text !== "string") {
-        throw new Error(data?.error || "The translator could not complete that request.");
-      }
-      setResult({
+      const data = await requestTranslation({ text: text.trim(), image: imageUrl, mode: translationMode, quality, imageDetail: quality === "improve" ? "original" : "high" }, controller.signal);
+      const nextResult: TranslationResult = {
         source: data.source_text,
         translation: data.translated_text,
         pronunciation: data.romanization || "No pronunciation needed.",
         context: data.context || "Translation complete.",
         language: data.detected_language || "Detected language",
         mode: translationMode,
-      });
+        uncertainSegments: data.uncertain_segments ?? [],
+        suggestedReply: data.suggested_reply || undefined,
+        model: data.model,
+      };
+      setResult(nextResult);
+      const historyItem: TranslationHistoryItem = { id: `translation-${Date.now()}`, createdAt: new Date().toISOString(), ...nextResult };
+      setTranslationHistory((current) => [historyItem, ...current].slice(0, 20));
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "The translator could not complete that request.");
+      setNotice(error instanceof DOMException && error.name === "AbortError" ? "Translation cancelled or timed out. Try again." : error instanceof Error ? error.message : "The translator could not complete that request.");
     } finally {
+      window.clearTimeout(timeout);
+      if (translationAbortRef.current === controller) translationAbortRef.current = null;
       setIsTranslating(false);
     }
+  }
+
+  function cancelTranslation() {
+    translationAbortRef.current?.abort();
   }
 
   function clearTranslationInput() {
@@ -247,9 +205,21 @@ function App() {
 
   function saveResult() {
     if (!result) return;
-    const phrase: SavedPhrase = { id: `saved-${Date.now()}`, source: result.source, translation: result.translation, pronunciation: result.pronunciation, category: "Saved today", isNew: true };
+    const phrase: SavedPhrase = { id: `saved-${Date.now()}`, source: result.source, translation: result.translation, pronunciation: result.pronunciation, category: "Saved today", isNew: true, isFavorite: false };
     setSavedPhrases((current) => [phrase, ...current]);
     setNotice("Saved to your phrasebook.");
+  }
+
+  function togglePhraseFavorite(id: string) {
+    setSavedPhrases((phrases) => phrases.map((phrase) => phrase.id === id ? { ...phrase, isFavorite: !phrase.isFavorite } : phrase));
+  }
+
+  function deletePhrase(id: string) {
+    setSavedPhrases((phrases) => phrases.filter((phrase) => phrase.id !== id));
+  }
+
+  function editPhrase(id: string, updates: Pick<SavedPhrase, "translation" | "category">) {
+    setSavedPhrases((phrases) => phrases.map((phrase) => phrase.id === id ? { ...phrase, ...updates, isNew: false } : phrase));
   }
 
   function copyText(value: string) {
@@ -271,6 +241,58 @@ function App() {
     setTripItems((items) => items.map((item) => item.id === id ? { ...item, done: !item.done } : item));
   }
 
+  function addTripItem(label: string) {
+    setTripItems((items) => [...items, { id: `trip-${Date.now()}`, label, done: false }]);
+  }
+
+  function removeTripItem(id: string) {
+    setTripItems((items) => items.filter((item) => item.id !== id));
+  }
+
+  async function enablePrivateLock(pin: string) {
+    try {
+      const vault = await encryptPrivateData({ profile, medicalInfo, emergencyDetails }, pin);
+      localStorage.setItem("privateVault", JSON.stringify(vault));
+      localStorage.removeItem("personalProfile"); localStorage.removeItem("medicalInfo"); localStorage.removeItem("emergencyDetails");
+      setPrivatePin(pin); setPrivateLocked(true); setPrivateError(null);
+    } catch (error) { setPrivateError(error instanceof Error ? error.message : "Could not enable private lock."); }
+  }
+
+  async function unlockPrivateData(pin: string) {
+    try {
+      const raw = localStorage.getItem("privateVault");
+      if (!raw) throw new Error("No private vault found.");
+      const data = await decryptPrivateData(JSON.parse(raw) as EncryptedVault, pin);
+      setProfile(data.profile); setMedicalInfo(data.medicalInfo); setEmergencyDetails(data.emergencyDetails); setPrivatePin(pin); setPrivateError(null);
+    } catch (error) { setPrivateError(error instanceof Error ? error.message : "Incorrect PIN or corrupted private data."); }
+  }
+
+  function lockPrivateData() {
+    setPrivatePin(null); setProfile(emptyPersonalProfile); setMedicalInfo(emptyMedicalInfo); setEmergencyDetails(emptyEmergencyDetails); setPrivateError(null);
+  }
+
+  function exportPrivateVault() {
+    const raw = localStorage.getItem("privateVault");
+    if (!raw) { setPrivateError("Enable the private lock before exporting."); return; }
+    const url = URL.createObjectURL(new Blob([raw], { type: "application/json" })); const anchor = document.createElement("a"); anchor.href = url; anchor.download = "exchange-private-vault.json"; anchor.click(); URL.revokeObjectURL(url);
+  }
+
+  async function importPrivateVault(file: File) {
+    try {
+      const parsed = JSON.parse(await file.text()) as EncryptedVault;
+      if (parsed.version !== 1 || !parsed.salt || !parsed.iv || !parsed.ciphertext) throw new Error("That backup is not a valid private vault.");
+      localStorage.setItem("privateVault", JSON.stringify(parsed)); setPrivateLocked(true); lockPrivateData();
+    } catch (error) { setPrivateError(error instanceof Error ? error.message : "Could not import that backup."); }
+  }
+
+  useEffect(() => {
+    if (!privateLocked || !privatePin) return;
+    const timeout = window.setTimeout(lockPrivateData, 5 * 60 * 1000);
+    const onVisibility = () => { if (document.visibilityState === "hidden") lockPrivateData(); };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => { window.clearTimeout(timeout); document.removeEventListener("visibilitychange", onVisibility); };
+  }, [privateLocked, privatePin]);
+
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -291,13 +313,14 @@ function App() {
           <div className="date-card"><span>EXCHANGE DAY</span><strong>01</strong><small>Getting ready</small></div>
         </section>
 
-        {activeTab === "translate" && <TranslateView imageUrl={imageUrl} fileInputRef={fileInputRef} text={text} setText={setText} translationMode={translationMode} setTranslationMode={setTranslationMode} handleImage={handleImage} runTranslation={runTranslation} clearTranslationInput={clearTranslationInput} openShowTranslation={() => setIsShowingTranslation(true)} isTranslating={isTranslating} result={result} saveResult={saveResult} copyText={copyText} speak={speak} notice={notice} setNotice={setNotice} />}
-        {activeTab === "phrasebook" && <PhrasebookView phrases={savedPhrases} copyText={copyText} speak={speak} />}
-        {activeTab === "trip" && <TripView items={tripItems} progress={tripProgress} toggleItem={toggleTripItem} notes={notes} setNotes={setNotes} links={usefulLinks} setLinks={setUsefulLinks} expenses={expenses} setExpenses={setExpenses} addresses={addresses} setAddresses={setAddresses} images={storedImages} setImages={setStoredImages} />}
-        {activeTab === "emergency" && <EmergencyView profile={profile} setProfile={setProfile} medicalInfo={medicalInfo} setMedicalInfo={setMedicalInfo} />}
+        {activeTab === "translate" && <TranslateView imageUrl={imageUrl} fileInputRef={fileInputRef} text={text} setText={setText} translationMode={translationMode} setTranslationMode={setTranslationMode} handleImage={handleImage} runTranslation={runTranslation} cancelTranslation={cancelTranslation} clearTranslationInput={clearTranslationInput} openShowTranslation={() => setIsShowingTranslation(true)} isOnline={isOnline} isTranslating={isTranslating} result={result} saveResult={saveResult} copyText={copyText} speak={speak} notice={notice} setNotice={setNotice} />}
+        {activeTab === "phrasebook" && <div className="content-stack"><PhrasebookView phrases={savedPhrases} copyText={copyText} speak={speak} toggleFavorite={togglePhraseFavorite} deletePhrase={deletePhrase} editPhrase={editPhrase} /><TranslationHistoryCard history={translationHistory} copyText={copyText} clearHistory={() => setTranslationHistory([])} /></div>}
+        {activeTab === "trip" && <TripView items={tripItems} progress={tripProgress} toggleItem={toggleTripItem} addItem={addTripItem} removeItem={removeTripItem} notes={notes} setNotes={setNotes} links={usefulLinks} setLinks={setUsefulLinks} expenses={expenses} setExpenses={setExpenses} addresses={addresses} setAddresses={setAddresses} images={storedImages} setImages={setStoredImages} />}
+        {activeTab === "emergency" && <EmergencyView profile={profile} setProfile={setProfile} medicalInfo={medicalInfo} setMedicalInfo={setMedicalInfo} emergencyDetails={emergencyDetails} setEmergencyDetails={setEmergencyDetails} privateLocked={privateLocked} privateUnlocked={!privateLocked || Boolean(privatePin)} privateError={privateError} enablePrivateLock={enablePrivateLock} unlockPrivateData={unlockPrivateData} lockPrivateData={lockPrivateData} exportPrivateVault={exportPrivateVault} importPrivateVault={importPrivateVault} />}
       </main>
 
       {isShowingTranslation && result && <ShowTranslationModal result={result} speak={speak} onClose={() => setIsShowingTranslation(false)} />}
+      {activeTab === "translate" && <p className="translation-privacy">Photos and text are sent to OpenAI only when you tap Translate. Text results may be saved locally; source photos are discarded after processing.</p>}
 
       <nav className="bottom-nav" aria-label="Main navigation">
         <NavButton active={activeTab === "translate"} icon="translate" label="Translate" onClick={() => selectTab("translate")} />
@@ -309,7 +332,7 @@ function App() {
   );
 }
 
-function TranslateView({ imageUrl, fileInputRef, text, setText, translationMode, setTranslationMode, handleImage, runTranslation, clearTranslationInput, openShowTranslation, isTranslating, result, saveResult, copyText, speak, notice, setNotice }: { imageUrl: string | null; fileInputRef: React.RefObject<HTMLInputElement | null>; text: string; setText: (value: string) => void; translationMode: TranslationMode; setTranslationMode: (mode: TranslationMode) => void; handleImage: (event: React.ChangeEvent<HTMLInputElement>) => void; runTranslation: () => void; clearTranslationInput: () => void; openShowTranslation: () => void; isTranslating: boolean; result: TranslationResult | null; saveResult: () => void; copyText: (value: string) => void; speak: (value: string) => void; notice: string | null; setNotice: (value: string | null) => void }) {
+function TranslateView({ imageUrl, fileInputRef, text, setText, translationMode, setTranslationMode, handleImage, runTranslation, cancelTranslation, clearTranslationInput, openShowTranslation, isOnline, isTranslating, result, saveResult, copyText, speak, notice, setNotice }: { imageUrl: string | null; fileInputRef: React.RefObject<HTMLInputElement | null>; text: string; setText: (value: string) => void; translationMode: TranslationMode; setTranslationMode: (mode: TranslationMode) => void; handleImage: (event: React.ChangeEvent<HTMLInputElement>) => void; runTranslation: (quality?: TranslationQuality) => void; cancelTranslation: () => void; clearTranslationInput: () => void; openShowTranslation: () => void; isOnline: boolean; isTranslating: boolean; result: TranslationResult | null; saveResult: () => void; copyText: (value: string) => void; speak: (value: string) => void; notice: string | null; setNotice: (value: string | null) => void }) {
   return <div className="translate-layout">
     <section className="hero-card">
       <div className="hero-card-copy"><span className="hero-kicker"><Icon name="spark" /> PHOTO TRANSLATOR <span className="demo-badge">LOCAL TEST</span></span><h2>Point, pause, understand.</h2><p>Take a photo of a menu, sign, or letter. We’ll turn the important bits into something you can use.</p></div>
@@ -325,11 +348,11 @@ function TranslateView({ imageUrl, fileInputRef, text, setText, translationMode,
       </button>
       <div className="direction-switch" aria-label="Translation direction"><button className={`direction-option ${translationMode === "readChinese" ? "active" : ""}`} type="button" onClick={() => setTranslationMode("readChinese")}><span>READ CHINESE</span><strong>中文 → English</strong><small>Understand signs, messages, and menus</small></button><button className={`direction-option ${translationMode === "speakChinese" ? "active" : ""}`} type="button" onClick={() => setTranslationMode("speakChinese")}><span>SPEAK CHINESE</span><strong>English → 中文</strong><small>Natural Chinese + pinyin</small></button></div>
       <div className="text-input-wrap"><textarea value={text} onChange={(event) => setText(event.target.value)} placeholder={translationMode === "speakChinese" ? "Type what you want to say in English..." : "Or type a phrase to translate..."} rows={2} /><span>{text.length}/500</span></div>
-      <div className="action-row"><button className="secondary-button" type="button" onClick={clearTranslationInput} disabled={!text && !imageUrl}>Clear</button><button className="primary-button" type="button" onClick={runTranslation} disabled={isTranslating}>{isTranslating ? <><span className="spinner" /> Translating...</> : <>Translate <Icon name="arrow" /></>}</button></div>
-      {notice && <p className="inline-notice" role="status">{notice}</p>}
+      <div className="action-row"><button className="secondary-button" type="button" onClick={clearTranslationInput} disabled={isTranslating || (!text && !imageUrl)}>Clear</button>{isTranslating ? <button className="secondary-button" type="button" onClick={cancelTranslation}>Cancel</button> : <button className="primary-button" type="button" onClick={() => runTranslation()}>{isOnline ? <>Translate <Icon name="arrow" /></> : <>Offline <Icon name="lock" /></>}</button>}</div>
+      <div className="translator-status"><span className={isOnline ? "online-label" : "offline-label"}><span className="status-dot" /> {isOnline ? "AI ready" : "Offline — AI paused"}</span>{notice && <p className="inline-notice" role="status">{notice}</p>}</div>
     </section>
 
-    {result && <section className="result-card"><div className="result-top"><div><p className="section-label">TRANSLATION RESULT</p><span className="result-language"><span className="language-dot" /> {result.language}</span></div><button className="icon-button" type="button" aria-label="Save phrase" onClick={saveResult}><Icon name="plus" /></button></div><div className="result-block"><span>ORIGINAL</span><p className="source-text">{result.source}</p><div className="result-actions"><button onClick={() => copyText(result.source)} type="button"><Icon name="copy" /> Copy</button><button onClick={() => speak(result.source)} type="button"><Icon name="volume" /> Listen</button></div></div><div className="result-divider" /><div className="result-block"><span>{result.mode === "speakChinese" ? "TRADITIONAL CHINESE" : "TRANSLATION"}</span><p className="translation-text">{result.translation}</p>{result.pronunciation !== "No pronunciation needed." && <p className="pronunciation">{result.mode === "speakChinese" ? `Pinyin: ${result.pronunciation}` : result.pronunciation}</p>}<div className="result-actions"><button onClick={openShowTranslation} type="button"><Icon name="arrow" /> Show this</button><button onClick={() => copyText(result.translation)} type="button"><Icon name="copy" /> Copy translation</button><button onClick={() => speak(result.translation)} type="button"><Icon name="volume" /> Hear it</button></div></div><div className="context-note"><Icon name="spark" /><p><strong>Context note</strong>{result.context}</p></div></section>}
+    {result && <section className="result-card"><div className="result-top"><div><p className="section-label">TRANSLATION RESULT</p><span className="result-language"><span className="language-dot" /> {result.language}{result.model ? ` · ${result.model}` : ""}</span></div><button className="icon-button" type="button" aria-label="Save phrase" onClick={saveResult}><Icon name="plus" /></button></div><div className="result-block"><span>ORIGINAL</span><p className="source-text">{result.source}</p><div className="result-actions"><button onClick={() => copyText(result.source)} type="button"><Icon name="copy" /> Copy</button><button onClick={() => speak(result.source)} type="button"><Icon name="volume" /> Listen</button></div></div><div className="result-divider" /><div className="result-block"><span>{result.mode === "speakChinese" ? "TRADITIONAL CHINESE" : "TRANSLATION"}</span><p className="translation-text">{result.translation}</p>{result.pronunciation !== "No pronunciation needed." && <p className="pronunciation">{result.mode === "speakChinese" ? `Pinyin: ${result.pronunciation}` : result.pronunciation}</p>}<div className="result-actions"><button onClick={openShowTranslation} type="button"><Icon name="arrow" /> Show this</button><button onClick={() => runTranslation("improve")} type="button" disabled={isTranslating || !isOnline}><Icon name="spark" /> Improve</button><button onClick={() => copyText(result.translation)} type="button"><Icon name="copy" /> Copy translation</button><button onClick={() => speak(result.translation)} type="button"><Icon name="volume" /> Hear it</button></div></div><div className="context-note"><Icon name="spark" /><p><strong>Context note</strong>{result.context}</p></div>{result.uncertainSegments && result.uncertainSegments.length > 0 && <div className="uncertainty-note"><strong>Check these words</strong><span>{result.uncertainSegments.join(" · ")}</span></div>}{result.suggestedReply && <div className="suggested-reply"><span>SUGGESTED REPLY</span><strong>{result.suggestedReply}</strong><button type="button" onClick={() => copyText(result.suggestedReply ?? "")}><Icon name="copy" /> Copy reply</button></div>}</section>}
     {!result && <section className="tip-strip"><div className="tip-icon"><Icon name="spark" /></div><div><strong>Small tip for better translations</strong><p>Fill the frame, keep the text flat, and include a little surrounding context.</p></div><Icon name="arrow" /></section>}
   </div>;
 }
@@ -338,15 +361,91 @@ function ShowTranslationModal({ result, speak, onClose }: { result: TranslationR
   return <div className="show-translation-backdrop" role="presentation"><section className="show-translation-modal" role="dialog" aria-modal="true" aria-label="Large translation display"><button className="show-translation-close" type="button" onClick={onClose}>Close <span aria-hidden="true">×</span></button><p className="section-label">SHOW THIS</p><p className="show-translation-source">{result.source}</p><h2>{result.translation}</h2>{result.pronunciation !== "No pronunciation needed." && <p className="show-translation-pronunciation">{result.mode === "speakChinese" ? `Pinyin: ${result.pronunciation}` : result.pronunciation}</p>}<button className="show-translation-speak" type="button" onClick={() => speak(result.translation)}><Icon name="volume" /> Play aloud</button><p className="show-translation-hint">Turn your screen toward the person you are speaking with.</p></section></div>;
 }
 
-function PhrasebookView({ phrases, copyText, speak }: { phrases: SavedPhrase[]; copyText: (value: string) => void; speak: (value: string) => void }) {
-  return <div className="content-stack"><div className="search-bar"><span>⌕</span><input placeholder="Search your phrases" /></div><div className="chip-row"><button className="filter-chip active" type="button">All phrases</button><button className="filter-chip" type="button">Food & health</button><button className="filter-chip" type="button">Getting around</button></div><div className="phrase-list">{phrases.map((phrase) => <article className="phrase-card" key={phrase.id}><div className="phrase-heading"><span className="phrase-category">{phrase.category}</span>{phrase.isNew && <span className="new-label">NEW</span>}</div><p className="phrase-source">{phrase.source}</p><p className="phrase-translation">{phrase.translation}</p><p className="phrase-pronunciation">{phrase.pronunciation}</p><div className="phrase-actions"><button type="button" onClick={() => copyText(phrase.translation)}><Icon name="copy" /> Copy</button><button type="button" onClick={() => speak(phrase.source)}><Icon name="volume" /> Listen</button></div></article>)}</div></div>;
+function PhrasebookView({ phrases, copyText, speak, toggleFavorite, deletePhrase, editPhrase }: { phrases: SavedPhrase[]; copyText: (value: string) => void; speak: (value: string) => void; toggleFavorite: (id: string) => void; deletePhrase: (id: string) => void; editPhrase: (id: string, updates: Pick<SavedPhrase, "translation" | "category">) => void }) {
+  const [query, setQuery] = useState("");
+  const [category, setCategory] = useState("All phrases");
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editTranslation, setEditTranslation] = useState("");
+  const [editCategory, setEditCategory] = useState("");
+  const categories = ["All phrases", "Favorites", "Food & health", "Getting around", "Essentials", "Saved today"];
+  const filteredPhrases = phrases.filter((phrase) => {
+    const searchMatch = `${phrase.source} ${phrase.translation} ${phrase.pronunciation}`.toLowerCase().includes(query.toLowerCase());
+    const categoryMatch = category === "All phrases" || category === "Favorites" && phrase.isFavorite || phrase.category === category;
+    return searchMatch && categoryMatch;
+  });
+
+  function startEditing(phrase: SavedPhrase) {
+    setEditingId(phrase.id);
+    setEditTranslation(phrase.translation);
+    setEditCategory(phrase.category);
+  }
+
+  function saveEdit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!editingId || !editTranslation.trim()) return;
+    editPhrase(editingId, { translation: editTranslation.trim(), category: editCategory.trim() || "Saved" });
+    setEditingId(null);
+  }
+
+  return <div className="content-stack"><div className="search-bar"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search your phrases" /></div><div className="chip-row">{categories.map((item) => <button key={item} className={`filter-chip ${category === item ? "active" : ""}`} type="button" onClick={() => setCategory(item)}>{item}</button>)}</div>{filteredPhrases.length === 0 && <div className="links-empty"><span className="links-empty-icon"><Icon name="book" /></span><div><strong>No matching phrases.</strong><p>Try another search or category.</p></div></div>}<div className="phrase-list">{filteredPhrases.map((phrase) => <article className="phrase-card" key={phrase.id}><div className="phrase-heading"><span className="phrase-category">{phrase.category}</span><div className="phrase-card-actions"><button className="favorite-button" type="button" onClick={() => toggleFavorite(phrase.id)} aria-label={`${phrase.isFavorite ? "Remove" : "Add"} favorite`}>{phrase.isFavorite ? "★" : "☆"}</button>{phrase.isNew && <span className="new-label">NEW</span>}</div></div><p className="phrase-source">{phrase.source}</p>{editingId === phrase.id ? <form className="phrase-edit-form" onSubmit={saveEdit}><textarea value={editTranslation} onChange={(event) => setEditTranslation(event.target.value)} rows={2} /><input value={editCategory} onChange={(event) => setEditCategory(event.target.value)} placeholder="Category" /><div><button className="primary-button" type="submit">Save</button><button className="secondary-button" type="button" onClick={() => setEditingId(null)}>Cancel</button></div></form> : <><p className="phrase-translation">{phrase.translation}</p><p className="phrase-pronunciation">{phrase.pronunciation}</p><div className="phrase-actions"><button type="button" onClick={() => copyText(phrase.translation)}><Icon name="copy" /> Copy</button><button type="button" onClick={() => speak(phrase.source)}><Icon name="volume" /> Listen</button><button type="button" onClick={() => startEditing(phrase)}>Edit</button><button type="button" onClick={() => deletePhrase(phrase.id)}>Delete</button></div></>}</article>)}</div></div>;
 }
 
-function TripView({ items, progress, toggleItem, notes, setNotes, links, setLinks, expenses, setExpenses, addresses, setAddresses, images, setImages }: { items: TripItem[]; progress: number; toggleItem: (id: string) => void; notes: string; setNotes: (value: string) => void; links: UsefulLink[]; setLinks: React.Dispatch<React.SetStateAction<UsefulLink[]>>; expenses: Expense[]; setExpenses: React.Dispatch<React.SetStateAction<Expense[]>>; addresses: SavedAddress[]; setAddresses: React.Dispatch<React.SetStateAction<SavedAddress[]>>; images: StoredImage[]; setImages: React.Dispatch<React.SetStateAction<StoredImage[]>> }) {
-  return <div className="content-stack"><section className="progress-card"><div><p className="section-label">ARRIVAL CHECKLIST</p><h3>{progress === 100 ? "You’re all set." : "One thoughtful step at a time."}</h3><p>{items.filter((item) => item.done).length} of {items.length} essentials ready</p></div><div className="progress-ring" style={{ "--progress": `${progress * 3.6}deg` } as React.CSSProperties}><strong>{progress}%</strong><span>ready</span></div></section><section className="checklist-card"><div className="section-row"><div><p className="section-label">BEFORE YOU GO</p><h3>Your essentials</h3></div><button className="plain-add" type="button"><Icon name="plus" /> Add</button></div><div className="checklist">{items.map((item) => <button key={item.id} className={`check-item ${item.done ? "done" : ""}`} type="button" onClick={() => toggleItem(item.id)}><span className="check-box">{item.done && <Icon name="check" />}</span><span>{item.label}</span></button>)}</div></section><ExpenseTracker expenses={expenses} setExpenses={setExpenses} /><AddressBook addresses={addresses} setAddresses={setAddresses} /><ImageLibrary images={images} setImages={setImages} /><section className="notes-card"><div className="section-row"><div><p className="section-label">A NOTE TO YOUR FUTURE SELF</p><h3>Keep it somewhere easy.</h3></div><span className="offline-label"><Icon name="lock" /> Private</span></div><textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Your first address, a reminder, or something you don’t want to forget..." rows={4} /></section><UsefulLinksCard links={links} setLinks={setLinks} /></div>;
+function TranslationHistoryCard({ history, copyText, clearHistory }: { history: TranslationHistoryItem[]; copyText: (value: string) => void; clearHistory: () => void }) {
+  return <section className="translation-history-card"><div className="section-row"><div><p className="section-label">LOCAL HISTORY</p><h3>Recent translations</h3></div>{history.length > 0 && <button className="plain-add" type="button" onClick={clearHistory}>Clear</button>}</div><p className="history-intro">Text results are kept on this device for quick reference. Source photos are never saved here.</p>{history.length === 0 ? <div className="links-empty"><span className="links-empty-icon"><Icon name="translate" /></span><div><strong>No translation history yet.</strong><p>Your next text translation will appear here.</p></div></div> : <div className="translation-history-list">{history.slice(0, 8).map((item) => <article className="history-row" key={item.id}><div><span>{new Date(item.createdAt).toLocaleString()}</span><strong>{item.source}</strong><p>{item.translation}</p></div><button type="button" onClick={() => copyText(item.translation)}><Icon name="copy" /> Copy</button></article>)}</div>}</section>;
+}
+
+function TripView({ items, progress, toggleItem, addItem, removeItem, notes, setNotes, links, setLinks, expenses, setExpenses, addresses, setAddresses, images, setImages }: { items: TripItem[]; progress: number; toggleItem: (id: string) => void; addItem: (label: string) => void; removeItem: (id: string) => void; notes: string; setNotes: (value: string) => void; links: UsefulLink[]; setLinks: React.Dispatch<React.SetStateAction<UsefulLink[]>>; expenses: Expense[]; setExpenses: React.Dispatch<React.SetStateAction<Expense[]>>; addresses: SavedAddress[]; setAddresses: React.Dispatch<React.SetStateAction<SavedAddress[]>>; images: StoredImage[]; setImages: React.Dispatch<React.SetStateAction<StoredImage[]>> }) {
+  return <><TripViewLegacy items={items} progress={progress} toggleItem={toggleItem} addItem={addItem} removeItem={removeItem} notes={notes} setNotes={setNotes} links={links} setLinks={setLinks} expenses={expenses} setExpenses={setExpenses} addresses={addresses} setAddresses={setAddresses} images={images} setImages={setImages} /><LocalBackupCard /></>;
+}
+
+function LocalBackupCard() {
+  const keys = ["savedPhrases", "tripItems", "usefulLinks", "expenses", "savedAddresses", "exchangeNotes", "translationHistory"];
+  function exportBackup() { const records = Object.fromEntries(keys.map((key) => [key, localStorage.getItem(key)])); const url = URL.createObjectURL(new Blob([JSON.stringify({ version: 1, exportedAt: new Date().toISOString(), records })], { type: "application/json" })); const anchor = document.createElement("a"); anchor.href = url; anchor.download = "exchange-companion-backup.json"; anchor.click(); URL.revokeObjectURL(url); }
+  async function importBackup(file: File) { const parsed = JSON.parse(await file.text()) as { version?: number; records?: Record<string, string | null> }; if (parsed.version !== 1 || !parsed.records) return; keys.forEach((key) => { const value = parsed.records?.[key]; if (typeof value === "string") localStorage.setItem(key, value); }); window.location.reload(); }
+  return <section className="backup-card"><div className="section-row"><div><p className="section-label">LOCAL RECOVERY</p><h3>Back up your travel kit</h3></div><Icon name="lock" /></div><p className="history-intro">Export phrases, checklists, links, expenses, addresses, notes, and translation history to a file kept by you.</p><div className="backup-actions"><button className="secondary-button" type="button" onClick={exportBackup}>Export backup</button><label className="backup-import"><span>Import backup</span><input type="file" accept="application/json" onChange={(event) => { const file = event.target.files?.[0]; if (file) void importBackup(file); event.currentTarget.value = ""; }} /></label></div></section>;
+}
+
+function TripViewLegacy({ items, progress, toggleItem, addItem, removeItem, notes, setNotes, links, setLinks, expenses, setExpenses, addresses, setAddresses, images, setImages }: { items: TripItem[]; progress: number; toggleItem: (id: string) => void; addItem: (label: string) => void; removeItem: (id: string) => void; notes: string; setNotes: (value: string) => void; links: UsefulLink[]; setLinks: React.Dispatch<React.SetStateAction<UsefulLink[]>>; expenses: Expense[]; setExpenses: React.Dispatch<React.SetStateAction<Expense[]>>; addresses: SavedAddress[]; setAddresses: React.Dispatch<React.SetStateAction<SavedAddress[]>>; images: StoredImage[]; setImages: React.Dispatch<React.SetStateAction<StoredImage[]>> }) {
+  const [newItem, setNewItem] = useState("");
+  const [isAddingItem, setIsAddingItem] = useState(false);
+
+  function submitItem(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!newItem.trim()) return;
+    addItem(newItem.trim());
+    setNewItem("");
+    setIsAddingItem(false);
+  }
+  return <div className="content-stack"><section className="progress-card"><div><p className="section-label">ARRIVAL CHECKLIST</p><h3>{progress === 100 ? "You’re all set." : "One thoughtful step at a time."}</h3><p>{items.filter((item) => item.done).length} of {items.length} essentials ready</p></div><div className="progress-ring" style={{ "--progress": `${progress * 3.6}deg` } as React.CSSProperties}><strong>{progress}%</strong><span>ready</span></div></section><section className="checklist-card"><div className="section-row"><div><p className="section-label">BEFORE YOU GO</p><h3>Your essentials</h3></div><button className="plain-add" type="button" onClick={() => setIsAddingItem((value) => !value)}><Icon name="plus" /> {isAddingItem ? "Close" : "Add"}</button></div>{isAddingItem && <form className="checklist-add-form" onSubmit={submitItem}><input value={newItem} onChange={(event) => setNewItem(event.target.value)} placeholder="Add an arrival task" autoFocus /><button className="primary-button" type="submit">Add task <Icon name="arrow" /></button></form>}<div className="checklist">{items.map((item) => <div className="check-item-row" key={item.id}><button className={`check-item ${item.done ? "done" : ""}`} type="button" onClick={() => toggleItem(item.id)}><span className="check-box">{item.done && <Icon name="check" />}</span><span>{item.label}</span></button><button className="delete-link" type="button" onClick={() => removeItem(item.id)} aria-label={`Remove ${item.label}`}>×</button></div>)}</div></section><ExpenseTracker expenses={expenses} setExpenses={setExpenses} /><AddressBook addresses={addresses} setAddresses={setAddresses} /><ImageLibrary images={images} setImages={setImages} /><section className="notes-card"><div className="section-row"><div><p className="section-label">A NOTE TO YOUR FUTURE SELF</p><h3>Keep it somewhere easy.</h3></div><span className="offline-label"><Icon name="lock" /> Private</span></div><textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Your first address, a reminder, or something you don’t want to forget..." rows={4} /></section><UsefulLinksCard links={links} setLinks={setLinks} /></div>;
 }
 
 function ExpenseTracker({ expenses, setExpenses }: { expenses: Expense[]; setExpenses: React.Dispatch<React.SetStateAction<Expense[]>> }) {
+  const blank = { amount: "", currency: "TWD", category: "Food", note: "", date: new Date().toISOString().slice(0, 10) };
+  const [draft, setDraft] = useState(blank);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [isAdding, setIsAdding] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const totals = expenses.reduce<Record<string, number>>((summary, expense) => ({ ...summary, [expense.currency]: (summary[expense.currency] ?? 0) + expense.amount }), {});
+
+  function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const amount = Number(draft.amount);
+    if (!Number.isFinite(amount) || amount <= 0) { setError("Enter an amount greater than zero."); return; }
+    if (editingId) setExpenses((current) => current.map((item) => item.id === editingId ? { ...item, amount, currency: draft.currency, category: draft.category, note: draft.note.trim(), date: draft.date } : item));
+    else setExpenses((current) => [{ id: `expense-${Date.now()}`, amount, currency: draft.currency, category: draft.category, note: draft.note.trim(), date: draft.date }, ...current]);
+    setDraft(blank); setEditingId(null); setIsAdding(false); setError(null);
+  }
+
+  function edit(expense: Expense) { setDraft({ amount: String(expense.amount), currency: expense.currency, category: expense.category, note: expense.note, date: expense.date }); setEditingId(expense.id); setIsAdding(true); }
+  function exportCsv() {
+    const rows = [["Date", "Category", "Note", "Currency", "Amount"], ...expenses.map((item) => [item.date, item.category, item.note, item.currency, String(item.amount)])];
+    const csv = rows.map((row) => row.map((cell) => `"${cell.replaceAll('"', '""')}"`).join(",")).join("\n");
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" })); const anchor = document.createElement("a"); anchor.href = url; anchor.download = "exchange-expenses.csv"; anchor.click(); URL.revokeObjectURL(url);
+  }
+  return <section className="expense-card"><div className="section-row"><div><p className="section-label">TRIP SPENDING</p><h3>Keep an easy eye on it.</h3></div><div className="section-actions"><button className="plain-add" type="button" onClick={() => { setIsAdding((value) => !value); setEditingId(null); setDraft(blank); setError(null); }}><Icon name="plus" /> {isAdding ? "Close" : "Add expense"}</button>{expenses.length > 0 && <button className="plain-add" type="button" onClick={exportCsv}>CSV</button>}</div></div><div className="expense-summary"><div><span>Totals by currency</span><strong>{Object.entries(totals).length ? Object.entries(totals).map(([code, amount]) => `${code} ${amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`).join(" · ") : "No expenses yet"}</strong></div><span className="expense-count">{expenses.length} {expenses.length === 1 ? "entry" : "entries"}</span></div>{isAdding && <form className="expense-form" onSubmit={submit}><label><span>Amount</span><input value={draft.amount} onChange={(event) => setDraft((current) => ({ ...current, amount: event.target.value }))} type="number" inputMode="decimal" min="0" step="0.01" placeholder="0.00" /></label><label><span>Currency</span><select value={draft.currency} onChange={(event) => setDraft((current) => ({ ...current, currency: event.target.value }))}><option>TWD</option><option>USD</option><option>EUR</option><option>GBP</option><option>SGD</option><option>JPY</option></select></label><label><span>Category</span><select value={draft.category} onChange={(event) => setDraft((current) => ({ ...current, category: event.target.value }))}><option>Food</option><option>Transport</option><option>Accommodation</option><option>Shopping</option><option>Study</option><option>Other</option></select></label><label><span>Date</span><input value={draft.date} onChange={(event) => setDraft((current) => ({ ...current, date: event.target.value }))} type="date" /></label><label className="expense-note-field"><span>Note (optional)</span><input value={draft.note} onChange={(event) => setDraft((current) => ({ ...current, note: event.target.value }))} placeholder="Night market snacks" /></label><button className="primary-button" type="submit">{editingId ? "Update expense" : "Save expense"} <Icon name="arrow" /></button>{error && <p className="form-error" role="alert">{error}</p>}</form>}{expenses.length > 0 && <div className="expense-list">{expenses.slice(0, 20).map((expense) => <article className="expense-row" key={expense.id}><div className="expense-category-dot">{expense.category.slice(0, 1)}</div><div className="expense-copy"><strong>{expense.note || expense.category}</strong><span>{expense.category} · {expense.date}</span></div><b>{expense.currency} {expense.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</b><button type="button" onClick={() => edit(expense)}>Edit</button><button className="delete-link" type="button" onClick={() => setExpenses((current) => current.filter((item) => item.id !== expense.id))} aria-label={`Delete ${expense.note || expense.category} expense`}>×</button></article>)}</div>}</section>;
+}
+
+function ExpenseTrackerLegacy({ expenses, setExpenses }: { expenses: Expense[]; setExpenses: React.Dispatch<React.SetStateAction<Expense[]>> }) {
   const [amount, setAmount] = useState("");
   const [currency, setCurrency] = useState("TWD");
   const [category, setCategory] = useState("Food");
@@ -354,7 +453,19 @@ function ExpenseTracker({ expenses, setExpenses }: { expenses: Expense[]; setExp
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [isAdding, setIsAdding] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const total = expenses.reduce((sum, expense) => sum + expense.amount, 0);
+  const totals = expenses.reduce<Record<string, number>>((summary, expense) => ({ ...summary, [expense.currency]: (summary[expense.currency] ?? 0) + expense.amount }), {});
+  const total = totals[currency] ?? 0;
+
+  function downloadCsv() {
+    const rows = [["Date", "Category", "Note", "Currency", "Amount"], ...expenses.map((expense) => [expense.date, expense.category, expense.note, expense.currency, String(expense.amount)])];
+    const csv = rows.map((row) => row.map((cell) => `"${cell.replaceAll('"', '""')}"`).join(",")).join("\n");
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "exchange-expenses.csv";
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }
 
   function addExpense(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -374,10 +485,18 @@ function ExpenseTracker({ expenses, setExpenses }: { expenses: Expense[]; setExp
 }
 
 function AddressBook({ addresses, setAddresses }: { addresses: SavedAddress[]; setAddresses: React.Dispatch<React.SetStateAction<SavedAddress[]>> }) {
+  const [label, setLabel] = useState(""); const [category, setCategory] = useState("Dorm"); const [englishAddress, setEnglishAddress] = useState(""); const [localAddress, setLocalAddress] = useState(""); const [mapUrl, setMapUrl] = useState(""); const [isAdding, setIsAdding] = useState(false); const [error, setError] = useState<string | null>(null); const [shown, setShown] = useState<SavedAddress | null>(null);
+  function addAddress(event: React.FormEvent<HTMLFormElement>) { event.preventDefault(); if (!label.trim() || !englishAddress.trim()) { setError("Add a location name and its English address first."); return; } let safeMapUrl: string | undefined; if (mapUrl.trim()) { try { const parsed = new URL(mapUrl.trim()); if (!["http:", "https:"].includes(parsed.protocol)) throw new Error(); safeMapUrl = parsed.toString(); } catch { setError("Use a valid http(s) map link."); return; } } setAddresses((current) => [{ id: `address-${Date.now()}`, label: label.trim(), category: category.trim() || "Address", englishAddress: englishAddress.trim(), localAddress: localAddress.trim(), mapUrl: safeMapUrl }, ...current]); setLabel(""); setCategory("Dorm"); setEnglishAddress(""); setLocalAddress(""); setMapUrl(""); setError(null); setIsAdding(false); }
+  function copyAddress(address: SavedAddress) { navigator.clipboard?.writeText(address.localAddress || address.englishAddress).then(() => setError("Address copied."), () => setError("Select and copy the address manually.")); }
+  return <section className="address-book"><div className="section-row"><div><p className="section-label">PLACE CARDS</p><h3>Addresses you can show</h3></div><button className="plain-add" type="button" onClick={() => { setIsAdding((value) => !value); setError(null); }}><Icon name="plus" /> {isAdding ? "Close" : "Add address"}</button></div><p className="address-intro">Save your dorm, university, hospital, or airport in English and the local language for quick sharing.</p>{isAdding && <form className="address-form" onSubmit={addAddress}><label><span>Place name</span><input value={label} onChange={(event) => setLabel(event.target.value)} placeholder="Main campus" /></label><label><span>Category</span><input value={category} onChange={(event) => setCategory(event.target.value)} placeholder="Dorm" /></label><label className="address-wide"><span>English address</span><input value={englishAddress} onChange={(event) => setEnglishAddress(event.target.value)} placeholder="Street, district, city" /></label><label className="address-wide"><span>Chinese / local address (optional)</span><input value={localAddress} onChange={(event) => setLocalAddress(event.target.value)} placeholder="Paste the local-language address" /></label><label className="address-wide"><span>Map link (optional)</span><input value={mapUrl} onChange={(event) => setMapUrl(event.target.value)} placeholder="https://maps.google.com/..." inputMode="url" /></label><button className="primary-button" type="submit">Save address <Icon name="arrow" /></button>{error && <p className="form-error" role="alert">{error}</p>}</form>}{!isAdding && error && <p className="inline-notice" role="status">{error}</p>}{addresses.length === 0 && !isAdding && <div className="links-empty"><span className="links-empty-icon"><Icon name="trip" /></span><div><strong>Your important places will appear here.</strong><p>Add your dorm or university address before you travel.</p></div></div>}{addresses.length > 0 && <div className="address-list">{addresses.map((address) => <article className="saved-address" key={address.id}><div className="address-marker">{address.category.slice(0, 1).toUpperCase()}</div><div className="saved-address-copy"><span>{address.category}</span><strong>{address.label}</strong><p>{address.englishAddress}</p>{address.localAddress && <p className="local-address">{address.localAddress}</p>}</div><div className="address-actions"><button type="button" onClick={() => setShown(address)}>Show</button><button type="button" onClick={() => copyAddress(address)}>Copy</button>{address.mapUrl && <a className="address-map-link" href={address.mapUrl} target="_blank" rel="noreferrer">Map</a>}<button className="delete-link" type="button" onClick={() => setAddresses((current) => current.filter((item) => item.id !== address.id))} aria-label={`Delete ${address.label}`}>×</button></div></article>)}</div>}{shown && <div className="show-translation-backdrop" role="presentation" onClick={() => setShown(null)}><section className="show-translation-modal address-show-modal" role="dialog" aria-modal="true" aria-label={`${shown.label} address`} onClick={(event) => event.stopPropagation()}><button className="show-translation-close" type="button" onClick={() => setShown(null)}>Close <span aria-hidden="true">×</span></button><p className="section-label">{shown.category}</p><h2>{shown.label}</h2><p className="show-translation-source">{shown.englishAddress}</p>{shown.localAddress && <p className="show-translation-pronunciation">{shown.localAddress}</p>}{shown.mapUrl && <a className="primary-button address-modal-map" href={shown.mapUrl} target="_blank" rel="noreferrer">Open map <Icon name="arrow" /></a>}<p className="show-translation-hint">Turn your screen toward the person helping you.</p></section></div>}</section>;
+}
+
+function AddressBookLegacy({ addresses, setAddresses }: { addresses: SavedAddress[]; setAddresses: React.Dispatch<React.SetStateAction<SavedAddress[]>> }) {
   const [label, setLabel] = useState("");
   const [category, setCategory] = useState("Dorm");
   const [englishAddress, setEnglishAddress] = useState("");
   const [localAddress, setLocalAddress] = useState("");
+  const [mapUrl, setMapUrl] = useState("");
   const [isAdding, setIsAdding] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -387,16 +506,28 @@ function AddressBook({ addresses, setAddresses }: { addresses: SavedAddress[]; s
       setError("Add a location name and its English address first.");
       return;
     }
-    setAddresses((current) => [{ id: `address-${Date.now()}`, label: label.trim(), category: category.trim() || "Address", englishAddress: englishAddress.trim(), localAddress: localAddress.trim() }, ...current]);
+    let safeMapUrl: string | undefined;
+    if (mapUrl.trim()) {
+      try {
+        const parsed = new URL(mapUrl.trim());
+        if (!["http:", "https:"].includes(parsed.protocol)) throw new Error("Unsupported map link");
+        safeMapUrl = parsed.toString();
+      } catch {
+        setError("Use a valid http(s) map link.");
+        return;
+      }
+    }
+    setAddresses((current) => [{ id: `address-${Date.now()}`, label: label.trim(), category: category.trim() || "Address", englishAddress: englishAddress.trim(), localAddress: localAddress.trim(), mapUrl: safeMapUrl }, ...current]);
     setLabel("");
     setCategory("Dorm");
     setEnglishAddress("");
     setLocalAddress("");
+    setMapUrl("");
     setError(null);
     setIsAdding(false);
   }
 
-  return <section className="address-book"><div className="section-row"><div><p className="section-label">PLACE CARDS</p><h3>Addresses you can show</h3></div><button className="plain-add" type="button" onClick={() => { setIsAdding((value) => !value); setError(null); }}><Icon name="plus" /> {isAdding ? "Close" : "Add address"}</button></div><p className="address-intro">Save your dorm, university, hospital, or airport in English and the local language for quick sharing.</p>{isAdding && <form className="address-form" onSubmit={addAddress}><label><span>Place name</span><input value={label} onChange={(event) => setLabel(event.target.value)} placeholder="Main campus" /></label><label><span>Category</span><input value={category} onChange={(event) => setCategory(event.target.value)} placeholder="Dorm" /></label><label className="address-wide"><span>English address</span><input value={englishAddress} onChange={(event) => setEnglishAddress(event.target.value)} placeholder="Street, district, city" /></label><label className="address-wide"><span>Chinese / local address (optional)</span><input value={localAddress} onChange={(event) => setLocalAddress(event.target.value)} placeholder="Paste the local-language address" /></label><button className="primary-button" type="submit">Save address <Icon name="arrow" /></button>{error && <p className="form-error" role="alert">{error}</p>}</form>}{addresses.length === 0 && !isAdding && <div className="links-empty"><span className="links-empty-icon"><Icon name="trip" /></span><div><strong>Your important places will appear here.</strong><p>Add your dorm or university address before you travel.</p></div></div>}{addresses.length > 0 && <div className="address-list">{addresses.map((address) => <article className="saved-address" key={address.id}><div className="address-marker">{address.category.slice(0, 1).toUpperCase()}</div><div className="saved-address-copy"><span>{address.category}</span><strong>{address.label}</strong><p>{address.englishAddress}</p>{address.localAddress && <p className="local-address">{address.localAddress}</p>}</div><div className="address-actions"><button type="button" onClick={() => navigator.clipboard?.writeText(address.localAddress || address.englishAddress)}>Copy</button><button className="delete-link" type="button" onClick={() => setAddresses((current) => current.filter((item) => item.id !== address.id))} aria-label={`Delete ${address.label}`}>×</button></div></article>)}</div>}</section>;
+  return <section className="address-book"><div className="section-row"><div><p className="section-label">PLACE CARDS</p><h3>Addresses you can show</h3></div><button className="plain-add" type="button" onClick={() => { setIsAdding((value) => !value); setError(null); }}><Icon name="plus" /> {isAdding ? "Close" : "Add address"}</button></div><p className="address-intro">Save your dorm, university, hospital, or airport in English and the local language for quick sharing.</p>{isAdding && <form className="address-form" onSubmit={addAddress}><label><span>Place name</span><input value={label} onChange={(event) => setLabel(event.target.value)} placeholder="Main campus" /></label><label><span>Category</span><input value={category} onChange={(event) => setCategory(event.target.value)} placeholder="Dorm" /></label><label className="address-wide"><span>English address</span><input value={englishAddress} onChange={(event) => setEnglishAddress(event.target.value)} placeholder="Street, district, city" /></label><label className="address-wide"><span>Chinese / local address (optional)</span><input value={localAddress} onChange={(event) => setLocalAddress(event.target.value)} placeholder="Paste the local-language address" /></label><label className="address-wide"><span>Map link (optional)</span><input value={mapUrl} onChange={(event) => setMapUrl(event.target.value)} placeholder="https://maps.google.com/..." inputMode="url" /></label><button className="primary-button" type="submit">Save address <Icon name="arrow" /></button>{error && <p className="form-error" role="alert">{error}</p>}</form>}{addresses.length === 0 && !isAdding && <div className="links-empty"><span className="links-empty-icon"><Icon name="trip" /></span><div><strong>Your important places will appear here.</strong><p>Add your dorm or university address before you travel.</p></div></div>}{addresses.length > 0 && <div className="address-list">{addresses.map((address) => <article className="saved-address" key={address.id}><div className="address-marker">{address.category.slice(0, 1).toUpperCase()}</div><div className="saved-address-copy"><span>{address.category}</span><strong>{address.label}</strong><p>{address.englishAddress}</p>{address.localAddress && <p className="local-address">{address.localAddress}</p>}</div><div className="address-actions"><button type="button" onClick={() => navigator.clipboard?.writeText(address.localAddress || address.englishAddress)}>Copy</button>{address.mapUrl && <a className="address-map-link" href={address.mapUrl} target="_blank" rel="noreferrer">Map</a>}<button className="delete-link" type="button" onClick={() => setAddresses((current) => current.filter((item) => item.id !== address.id))} aria-label={`Delete ${address.label}`}>×</button></div></article>)}</div>}</section>;
 }
 
 function ImageLibrary({ images, setImages }: { images: StoredImage[]; setImages: React.Dispatch<React.SetStateAction<StoredImage[]>> }) {
@@ -487,8 +618,22 @@ function UsefulLinksCard({ links, setLinks }: { links: UsefulLink[]; setLinks: R
   return <section className="links-card"><div className="section-row"><div><p className="section-label">YOUR SHORTCUTS</p><h3>Useful websites</h3></div><button className="plain-add" type="button" onClick={() => { setIsAdding((value) => !value); setError(null); }}><Icon name="plus" /> {isAdding ? "Close" : "Add website"}</button></div><p className="links-intro">Keep your university portal, transport pages, booking sites, and anything else you need one tap away.</p>{isAdding && <form className="link-form" onSubmit={addLink}><label><span>Website name</span><input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="University portal" /></label><label><span>Website address</span><input value={url} onChange={(event) => setUrl(event.target.value)} placeholder="portal.example.edu" inputMode="url" /></label><label><span>Category</span><input value={category} onChange={(event) => setCategory(event.target.value)} placeholder="Travel" /></label><button className="primary-button" type="submit">Save website <Icon name="arrow" /></button>{error && <p className="form-error" role="alert">{error}</p>}</form>}{links.length === 0 && !isAdding && <div className="links-empty"><span className="links-empty-icon"><Icon name="arrow" /></span><div><strong>Your shortcuts will appear here.</strong><p>Add the pages you reach for most during your exchange.</p></div></div>}{links.length > 0 && <div className="links-list">{links.map((link) => <article className="saved-link" key={link.id}><div className="link-favicon">{link.title.slice(0, 1).toUpperCase()}</div><div className="saved-link-copy"><span>{link.category}</span><strong>{link.title}</strong><small>{link.url.replace(/^https?:\/\//, "").replace(/\/$/, "")}</small></div><a className="open-link" href={link.url} target="_blank" rel="noreferrer">Open <Icon name="arrow" /></a><button className="delete-link" type="button" onClick={() => setLinks((current) => current.filter((item) => item.id !== link.id))} aria-label={`Delete ${link.title}`}>×</button></article>)}</div>}</section>;
 }
 
-function EmergencyView({ profile, setProfile, medicalInfo, setMedicalInfo }: { profile: PersonalProfile; setProfile: React.Dispatch<React.SetStateAction<PersonalProfile>>; medicalInfo: MedicalInfo; setMedicalInfo: React.Dispatch<React.SetStateAction<MedicalInfo>> }) {
+function PrivateLockCard({ locked, unlocked, error, enable, unlock, lock, exportVault = () => { const raw = localStorage.getItem("privateVault"); if (!raw) return; const url = URL.createObjectURL(new Blob([raw], { type: "application/json" })); const anchor = document.createElement("a"); anchor.href = url; anchor.download = "exchange-private-vault.json"; anchor.click(); URL.revokeObjectURL(url); }, importVault = async (file: File) => { const parsed = JSON.parse(await file.text()) as EncryptedVault; if (parsed.version !== 1 || !parsed.salt || !parsed.iv || !parsed.ciphertext) throw new Error("That backup is not a valid private vault."); localStorage.setItem("privateVault", JSON.stringify(parsed)); window.location.reload(); } }: { locked: boolean; unlocked: boolean; error: string | null; enable: (pin: string) => Promise<void>; unlock: (pin: string) => Promise<void>; lock: () => void; exportVault?: () => void; importVault?: (file: File) => Promise<void> }) {
+  const [pin, setPin] = useState(""); const [confirm, setConfirm] = useState("");
+  async function submit(event: React.FormEvent<HTMLFormElement>) { event.preventDefault(); if (pin.length < 6) return; if (!locked && pin !== confirm) return; await (locked ? unlock(pin) : enable(pin)); setPin(""); setConfirm(""); }
+  return <section className="private-lock-card"><div className="section-row"><div><p className="section-label">OPTIONAL PRIVACY LOCK</p><h3>{unlocked ? "Private details unlocked" : "Private details are locked"}</h3></div><Icon name="lock" /></div><p className="medical-intro">Protect your passport, medical, and emergency details with Web Crypto. The PIN is never stored.</p>{unlocked ? <div className="private-lock-actions"><button className="secondary-button" type="button" onClick={lock}>Lock now</button><button className="secondary-button" type="button" onClick={exportVault}>Export encrypted backup</button></div> : <><form className="private-lock-form" onSubmit={submit}><label><span>{locked ? "PIN" : "New PIN (6+ characters)"}</span><input value={pin} onChange={(event) => setPin(event.target.value)} type="password" inputMode="numeric" autoComplete="off" /></label>{!locked && <label><span>Confirm PIN</span><input value={confirm} onChange={(event) => setConfirm(event.target.value)} type="password" inputMode="numeric" autoComplete="off" /></label>}<button className="primary-button" type="submit">{locked ? "Unlock details" : "Enable lock"}</button></form><label className="private-import"><span>Restore encrypted backup</span><input type="file" accept="application/json" onChange={(event) => { const file = event.target.files?.[0]; if (file) void importVault(file); event.currentTarget.value = ""; }} /></label></>}{error && <p className="form-error" role="alert">{error}</p>}</section>;
+}
+
+function EmergencyView({ profile, setProfile, medicalInfo, setMedicalInfo, emergencyDetails, setEmergencyDetails, privateLocked, privateUnlocked, privateError, enablePrivateLock, unlockPrivateData, lockPrivateData, exportPrivateVault, importPrivateVault }: { profile: PersonalProfile; setProfile: React.Dispatch<React.SetStateAction<PersonalProfile>>; medicalInfo: MedicalInfo; setMedicalInfo: React.Dispatch<React.SetStateAction<MedicalInfo>>; emergencyDetails: EmergencyDetails; setEmergencyDetails: React.Dispatch<React.SetStateAction<EmergencyDetails>>; privateLocked: boolean; privateUnlocked: boolean; privateError: string | null; enablePrivateLock: (pin: string) => Promise<void>; unlockPrivateData: (pin: string) => Promise<void>; lockPrivateData: () => void; exportPrivateVault?: () => void; importPrivateVault?: (file: File) => Promise<void> }) {
+  return <div className="content-stack"><section className="emergency-banner"><div className="emergency-symbol"><Icon name="emergency" /></div><div><p className="section-label">ALWAYS AVAILABLE</p><h2>Your essentials, even offline.</h2><p>These details are saved on this device and do not need a signal.</p></div></section><PrivateLockCard locked={privateLocked} unlocked={privateUnlocked} error={privateError} enable={enablePrivateLock} unlock={unlockPrivateData} lock={lockPrivateData} />{privateUnlocked && <><PersonalProfileCard profile={profile} setProfile={setProfile} /><MedicalCard medicalInfo={medicalInfo} setMedicalInfo={setMedicalInfo} /><EmergencyDetailsCard details={emergencyDetails} setDetails={setEmergencyDetails} /><section className="contact-grid"><EmergencyCard label="Local emergency" value={emergencyDetails.localEmergency || "112"} detail="Police, fire, ambulance" /><EmergencyCard label="Embassy / consulate" value={emergencyDetails.embassy || "Not added yet"} detail="Your nearest diplomatic contact" /><EmergencyCard label="Where I am staying" value={emergencyDetails.accommodation || "Not added yet"} detail="Your accommodation" /><EmergencyCard label="My medical note" value={medicalInfo.allergies || medicalInfo.medications ? "Details saved" : "Not added yet"} detail={medicalInfo.allergies ? `Allergies: ${medicalInfo.allergies}` : "Allergies and important details"} /></section><section className="emergency-privacy"><Icon name="lock" /><div><strong>Your details stay yours.</strong><p>Personal emergency information stays on this device by default. Cloud sync will always be opt-in.</p></div></section></>}</div>;
+}
+
+function EmergencyViewLegacy({ profile, setProfile, medicalInfo, setMedicalInfo, emergencyDetails, setEmergencyDetails }: { profile: PersonalProfile; setProfile: React.Dispatch<React.SetStateAction<PersonalProfile>>; medicalInfo: MedicalInfo; setMedicalInfo: React.Dispatch<React.SetStateAction<MedicalInfo>>; emergencyDetails: EmergencyDetails; setEmergencyDetails: React.Dispatch<React.SetStateAction<EmergencyDetails>> }) {
   return <div className="content-stack"><section className="emergency-banner"><div className="emergency-symbol"><Icon name="emergency" /></div><div><p className="section-label">ALWAYS AVAILABLE</p><h2>Your essentials, even offline.</h2><p>These details are saved on this device and don’t need a signal.</p></div></section><PersonalProfileCard profile={profile} setProfile={setProfile} /><MedicalCard medicalInfo={medicalInfo} setMedicalInfo={setMedicalInfo} /><section className="contact-grid"><EmergencyCard label="Local emergency" value="112" detail="Police · fire · ambulance" /><EmergencyCard label="Embassy / consulate" value="Add number" detail="Tap to add your nearest contact" /><EmergencyCard label="Where I’m staying" value="Not added yet" detail="Your accommodation address" /><EmergencyCard label="My medical note" value={medicalInfo.allergies || medicalInfo.medications ? "Details saved" : "Not added yet"} detail={medicalInfo.allergies ? `Allergies: ${medicalInfo.allergies}` : "Allergies and important details"} /></section><section className="emergency-privacy"><Icon name="lock" /><div><strong>Your details stay yours.</strong><p>We’ll keep personal emergency information on this device by default. Cloud sync will always be opt-in.</p></div></section></div>;
+}
+
+function EmergencyDetailsCard({ details, setDetails }: { details: EmergencyDetails; setDetails: React.Dispatch<React.SetStateAction<EmergencyDetails>> }) {
+  return <section className="emergency-details-card"><div className="section-row"><div><p className="section-label">EMERGENCY CONTACTS</p><h3>Who and where to call</h3></div><span className="offline-label"><Icon name="lock" /> Private</span></div><p className="medical-intro">These fields are editable and remain available in airplane mode.</p><div className="emergency-details-grid"><label><span>Local emergency number</span><input value={details.localEmergency} onChange={(event) => setDetails((current) => ({ ...current, localEmergency: event.target.value }))} inputMode="tel" placeholder="112" /></label><label><span>Accommodation</span><textarea value={details.accommodation} onChange={(event) => setDetails((current) => ({ ...current, accommodation: event.target.value }))} rows={2} placeholder="Dorm name, address, phone" /></label><label><span>University</span><textarea value={details.university} onChange={(event) => setDetails((current) => ({ ...current, university: event.target.value }))} rows={2} placeholder="Campus office and address" /></label><label><span>Embassy / consulate</span><textarea value={details.embassy} onChange={(event) => setDetails((current) => ({ ...current, embassy: event.target.value }))} rows={2} placeholder="Name and phone number" /></label><label><span>Insurance</span><textarea value={details.insurance} onChange={(event) => setDetails((current) => ({ ...current, insurance: event.target.value }))} rows={2} placeholder="Provider, policy, assistance line" /></label></div></section>;
 }
 
 function MedicalCard({ medicalInfo, setMedicalInfo }: { medicalInfo: MedicalInfo; setMedicalInfo: React.Dispatch<React.SetStateAction<MedicalInfo>> }) {
@@ -523,66 +668,23 @@ function PersonalProfileCard({ profile, setProfile }: { profile: PersonalProfile
   </section>;
 }
 
-function EmergencyCard({ label, value, detail }: { label: string; value: string; detail: string }) { return <article className="emergency-card"><span className="card-label">{label}</span><strong>{value}</strong><p>{detail}</p><button type="button">Edit <Icon name="arrow" /></button></article>; }
+function EmergencyCard({ label, value, detail }: { label: string; value: string; detail: string }) {
+  const [currentValue, setCurrentValue] = useState(value);
+  function edit() {
+    const next = window.prompt(`Update ${label}`, currentValue === "Not added yet" || currentValue === "Add number" ? "" : currentValue);
+    if (next === null) return;
+    const clean = next.trim();
+    setCurrentValue(clean || "Not added yet");
+    localStorage.setItem(`emergencyCard:${label}`, clean);
+  }
+  return <article className="emergency-card"><span className="card-label">{label}</span><strong>{currentValue}</strong><p>{detail}</p><button type="button" onClick={edit}>Edit <Icon name="arrow" /></button></article>;
+}
 function NavButton({ active, icon, label, onClick }: { active: boolean; icon: "translate" | "book" | "trip" | "emergency"; label: string; onClick: () => void }) { return <button className={`nav-button ${active ? "active" : ""}`} onClick={onClick} type="button"><Icon name={icon} /><span>{label}</span></button>; }
-function openImageDatabase(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    if (!("indexedDB" in window)) {
-      reject(new Error("IndexedDB is unavailable"));
-      return;
-    }
-    const request = window.indexedDB.open(IMAGE_DB_NAME, 1);
-    request.onupgradeneeded = () => request.result.createObjectStore(IMAGE_STORE_NAME, { keyPath: "id" });
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error ?? new Error("Could not open image storage"));
-  });
-}
-
-async function loadStoredImages(): Promise<StoredImage[]> {
-  const database = await openImageDatabase();
-  return new Promise((resolve, reject) => {
-    const request = database.transaction(IMAGE_STORE_NAME, "readonly").objectStore(IMAGE_STORE_NAME).getAll();
-    request.onsuccess = () => resolve((request.result as StoredImage[]).sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
-    request.onerror = () => reject(request.error ?? new Error("Could not load saved images"));
-  });
-}
-
-async function putStoredImage(image: StoredImage): Promise<void> {
-  const database = await openImageDatabase();
-  return new Promise((resolve, reject) => {
-    const transaction = database.transaction(IMAGE_STORE_NAME, "readwrite");
-    transaction.objectStore(IMAGE_STORE_NAME).put(image);
-    transaction.oncomplete = () => resolve();
-    transaction.onerror = () => reject(transaction.error ?? new Error("Could not save image"));
-  });
-}
-
-async function removeStoredImage(id: string): Promise<void> {
-  const database = await openImageDatabase();
-  return new Promise((resolve, reject) => {
-    const transaction = database.transaction(IMAGE_STORE_NAME, "readwrite");
-    transaction.objectStore(IMAGE_STORE_NAME).delete(id);
-    transaction.oncomplete = () => resolve();
-    transaction.onerror = () => reject(transaction.error ?? new Error("Could not remove image"));
-  });
-}
-
-function readFileAsDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("No image data returned"));
-    reader.onerror = () => reject(reader.error ?? new Error("Could not read image"));
-    reader.readAsDataURL(file);
-  });
-}
-
 function isPersonalProfile(value: unknown): value is PersonalProfile {
   return typeof value === "object" && value !== null
     && "name" in value && typeof value.name === "string"
     && "studentId" in value && typeof value.studentId === "string"
     && "passportId" in value && typeof value.passportId === "string";
 }
-
-function loadStorage<T>(key: string, fallback: T): T { try { const stored = localStorage.getItem(key); return stored ? JSON.parse(stored) as T : fallback; } catch { return fallback; } }
 
 export default App;
